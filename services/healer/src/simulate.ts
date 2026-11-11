@@ -76,12 +76,27 @@ const INTENTS: Intent[] = [
     make: (_, o) => (o.status === 'processing' || o.status === 'shipped' ? 'Ask to change the delivery address of this order. Make up a realistic new address in the same town, with a postcode.' : null),
   },
   {
-    id: 'partial',
-    label: 'multi-item partial refund',
-    weight: 1,
-    make: (_, o) => {
-      if (!o.deliveredAt || o.items.reduce((n, i) => n + i.qty, 0) < 2) return null;
-      return 'Ask to return only part of this order: some of the items, or fewer than all of one item you bought several of. Ask how much you will get back and tell them to go ahead with the refund.';
+    // The forms where the small model was measured to slip even with every rule known. Weighted to about a quarter of customers.
+    id: 'complex',
+    label: 'complex multi-item return',
+    weight: 5,
+    make: (env, o, rnd) => {
+      if (!o.deliveredAt) return null;
+      const others = env.orders.filter((x) => x.customerId === o.customerId && x.id !== o.id && x.deliveredAt);
+      const units = o.items.reduce((n, i) => n + i.qty, 0);
+      const also = (x: Order) => `Your other order ${x.id}, delivered ${x.deliveredAt}, paid ${usd(x.totalPaid)}: ${itemList(x)}.`;
+      const forms: string[] = [];
+      if (units >= 2) {
+        forms.push(`Ask to return everything from this order except one ${rnd(o.items).name}, which you are keeping. Mention any item you opened. Tell them to go ahead and refund what is due, with no need to check back.`);
+      }
+      if (others.length) {
+        const x = rnd(others);
+        forms.push(`${also(x)} In one message, ask to return items from this order and from ${x.id}, with a reason for each. Ask them to refund whatever they can.`);
+        if (units >= 2) {
+          forms.push(`${also(x)} Ask to return only part of this order (some of the items, or fewer than all of one item you bought several of) together with one item from ${x.id}. Ask how much you will get back in total and tell them to go ahead.`);
+        }
+      }
+      return forms.length ? rnd(forms) : null;
     },
   },
   {
@@ -105,8 +120,14 @@ const INTENTS: Intent[] = [
   },
 ];
 
+const itemFacts = (i: Order['items'][number]) => `${i.qty} x ${i.name} at ${usd(i.unitPrice)} each${i.opened ? ' (you have opened it)' : ''}${i.finalSale ? ' (bought as final sale)' : ''}`;
+
+function itemList(o: Order): string {
+  return `${o.items.map(itemFacts).join('; ')}${o.discountPct ? `, with a ${o.discountPct}% discount` : ''}`;
+}
+
 function orderFacts(env: EnvSnapshot, customer: Customer, o: Order): string {
-  const items = o.items.map((i) => `- ${i.qty} x ${i.name} at ${usd(i.unitPrice)} each${i.opened ? ' (you have opened it)' : ''}${i.finalSale ? ' (bought as final sale)' : ''}`);
+  const items = o.items.map((i) => `- ${itemFacts(i)}`);
   const refunds = env.refunds.filter((r) => r.orderId === o.id).map((r) => `Already refunded ${usd(r.amount)} on ${r.createdAt} (${r.reason}).`);
   return [
     `You are ${customer.name}. Today is ${env.today}.`,

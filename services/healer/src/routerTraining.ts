@@ -1,15 +1,17 @@
 import { createHash } from 'node:crypto';
-import { Environment, runAgent, trainRouter, type AgentVersion, type Job, type Proposal, type RouterExample, type RouterModel, type Tier, type Trace } from '@healer/agent';
+import { Environment, roundCents, runAgent, trainRouter, type AgentVersion, type Job, type Proposal, type RouterExample, type RouterModel, type Tier, type Trace } from '@healer/agent';
 import { newId, type Healer } from './console.ts';
 import { pool } from './evalRunner.ts';
-import { judgeTrace } from './judge.ts';
+import { policyChecks } from './judge.ts';
+import { envChanges, usd } from './policy.ts';
 import { createProposal } from './propose.ts';
 
 // The real model surface: a small router trained on the demo's own traces, deciding per request whether
 // the small model is enough. Supervised learning at toy scale.
 
 export const EASY_TIER: Tier = 'haiku';
-const CONCURRENCY = 4;
+export const EASY_REPLAYS = 4;
+const CONCURRENCY = 3;
 // A replay whose run crashed (an API error, not a wrong answer) is retried, so plumbing never becomes a label.
 const RUN_ATTEMPTS = 3;
 
@@ -18,22 +20,22 @@ export function hardTierFor(live: AgentVersion): Tier {
   return current === EASY_TIER ? 'sonnet' : current;
 }
 
-// Distinct first customer messages from real traffic, newest first.
-function sourceTraces(h: Healer, max: number): Trace[] {
+// Distinct first customer messages from real traffic. Seeded cases come first, so a size cut never drops the
+// known-tricky requests; then the newest of the rest.
+export function sourceTraces(h: Healer, max: number): Trace[] {
   const seen = new Set<string>();
-  const out: Trace[] = [];
+  const firsts: Trace[] = [];
   for (const s of h.store.traceSummaries()) {
-    if (out.length >= max) break;
     if (!['shop', 'simulator', 'seed'].includes(s.source) || seen.has(s.input)) continue;
     const trace = h.store.trace(s.id)!;
     if (trace.history.length || trace.error) continue;
     seen.add(trace.input);
-    out.push(trace);
+    firsts.push(trace);
   }
-  return out;
+  return [...firsts.filter((t) => t.source === 'seed'), ...firsts.filter((t) => t.source !== 'seed')].slice(0, max);
 }
 
-async function replay(h: Healer, live: AgentVersion, source: Trace, tier: Tier): Promise<{ trace: Trace; passed: boolean }> {
+async function replay(h: Healer, live: AgentVersion, source: Trace, tier: Tier): Promise<Trace> {
   const version: AgentVersion = { ...live, model: { mode: 'fixed', tier, effort: live.model.effort } };
   let trace: Trace;
   let attempt = 0;
@@ -53,8 +55,44 @@ async function replay(h: Healer, live: AgentVersion, source: Trace, tier: Tier):
     attempt++;
   } while (trace.error && attempt < RUN_ATTEMPTS);
   h.store.saveTrace(trace);
-  const { verdict } = await judgeTrace(h, trace, { sandbox: true });
-  return { trace, passed: verdict.passed };
+  return trace;
+}
+
+type Write = { amount: number; method: string };
+
+// What a run did to the records, keyed by the kind of write and the order it touched.
+function writes(t: Trace): Map<string, Write> {
+  const c = envChanges(t.envBefore, t.envAfter);
+  const out = new Map<string, Write>();
+  for (const r of c.newRefunds) {
+    const key = `refund on ${r.orderId}`;
+    const prev = out.get(key);
+    out.set(key, { amount: roundCents((prev?.amount ?? 0) + r.amount), method: prev && prev.method !== r.method ? 'mixed methods' : r.method });
+  }
+  for (const p of c.cancelled) out.set(`cancellation of ${p.after.id}`, { amount: 0, method: '' });
+  for (const p of c.readdressed) out.set(`address change on ${p.after.id}`, { amount: 0, method: '' });
+  for (const e of c.newEscalations) out.set(`escalation about ${e.orderId ?? 'the conversation'}`, { amount: 0, method: '' });
+  return out;
+}
+
+export const passesPolicy = (t: Trace) => !t.error && policyChecks(t).every((c) => c.passed);
+
+// Why an easy replay is wrong, or null. No model judge: a policy rule broken in code, or a write that contradicts
+// the strong tier's replay when that replay kept every rule. Asking a question where the strong tier acted is not wrong.
+export function wrongness(easy: Trace, reference: Trace): string | null {
+  if (easy.error) return null;
+  const broken = policyChecks(easy).filter((c) => !c.passed);
+  if (broken.length) return `broke a policy rule (${broken.map((c) => c.label).join('; ')})`;
+  if (!passesPolicy(reference)) return null;
+  const ref = writes(reference);
+  for (const [key, w] of writes(easy)) {
+    const r = ref.get(key);
+    if (!r) return `made a ${key} that the reference did not make`;
+    if (key.startsWith('refund') && (Math.abs(w.amount - r.amount) > 0.01 || w.method !== r.method)) {
+      return `refunded ${usd(w.amount)} to ${w.method} where the reference refunded ${usd(r.amount)} to ${r.method}`;
+    }
+  }
+  return null;
 }
 
 const textKey = (text: string) => createHash('sha256').update(text).digest('hex');
@@ -80,20 +118,23 @@ export function startDatasetJob(h: Healer, maxExamples: number): Job {
     const sources = sourceTraces(h, maxExamples);
     const examples: Omit<RouterExample, 'split'>[] = [];
     let done = 0;
+    let replays = 0;
     job.progress(0, sources.length);
     await pool(sources, CONCURRENCY, async (source) => {
       h.checkEpoch(epoch);
-      const easy = await replay(h, live, source, EASY_TIER);
-      const strong = await replay(h, live, source, hard);
+      const [reference, ...easy] = await Promise.all([replay(h, live, source, hard), ...Array.from({ length: EASY_REPLAYS }, () => replay(h, live, source, EASY_TIER))]);
       h.checkEpoch(epoch);
+      replays += 1 + easy.length;
+      const wrong = easy.find((t) => wrongness(t, reference) !== null);
+      const hardPassed = passesPolicy(reference);
       examples.push({
         id: `rx_${textKey(source.input).slice(0, 12)}`,
         text: source.input,
-        needsStrong: !easy.passed && strong.passed,
-        easyTraceId: easy.trace.id,
-        hardTraceId: strong.trace.id,
-        easyPassed: easy.passed,
-        hardPassed: strong.passed,
+        needsStrong: Boolean(wrong) && hardPassed,
+        easyTraceId: (wrong ?? easy[0]!).id,
+        hardTraceId: reference.id,
+        easyPassed: !wrong,
+        hardPassed,
       });
       job.progress(++done);
     });
@@ -103,9 +144,9 @@ export function startDatasetJob(h: Healer, maxExamples: number): Job {
     const positives = dataset.filter((e) => e.needsStrong).length;
     h.activity(
       'judge',
-      `Router dataset: ${dataset.length} requests replayed on ${EASY_TIER} and ${hard}; ${positives} needed ${hard} (failed on ${EASY_TIER}, passed on ${hard})`,
+      `Router dataset: ${dataset.length} requests, ${replays} replays (${EASY_REPLAYS} on ${EASY_TIER} and 1 on ${hard} each), labelled by the policy rules and by agreement with ${hard}, no model judge; ${positives} needed ${hard}`,
     );
-    h.changed('trace', 'verdict');
+    h.changed('trace');
   });
 }
 
@@ -133,7 +174,14 @@ export function proposeRouter(h: Healer, router: RouterModel): Proposal {
     author: 'loop',
     issueId: null,
     title: `Route each request between ${EASY_TIER} and ${hard} with router ${router.id}`,
-    rationale: `Router ${router.id} is a bag-of-words classifier trained on ${m.trainSize} requests from this demo's own traces, each replayed on ${EASY_TIER} and ${hard}. It sends a request to ${hard} only when it predicts ${EASY_TIER} would fail. It scores ${pct(m.trainAccuracy)} on its training examples and ${pct(m.valAccuracy)} on ${m.valSize} held-out examples. This is supervised learning at toy scale, so the gate decides: it is kept only if the pass rate holds, and the point is a lower cost per task.`,
+    rationale: [
+      `Router ${router.id} is a bag-of-words classifier trained on ${m.trainSize} requests from this demo's own traces (${m.trainPositives} of them needed ${hard}), each replayed ${EASY_REPLAYS} times on ${EASY_TIER} and once on ${hard}. It sends a request to ${hard} only when it predicts ${EASY_TIER} would get it wrong.`,
+      `It scores ${pct(m.trainAccuracy)} on its training examples and ${pct(m.valAccuracy)} on ${m.valSize} held-out examples.`,
+      m.valPositives
+        ? `Of the ${m.valPositives} held-out requests that needed ${hard}, it routes ${pct(m.valRecall ?? 0)} there.`
+        : `None of the held-out requests needed ${hard}, so the held-out accuracy says nothing about whether it sends hard requests to ${hard}; it only shows that easy requests stay on ${EASY_TIER}.`,
+      'This is supervised learning at toy scale, so the gate decides: it is kept only if every capability case is routed to the strong tier, nothing regresses and the pass rate holds. The point is a lower cost per task.',
+    ].join(' '),
     changes: [{ surface: 'model', op: 'set_model', model: { mode: 'routed', easyTier: EASY_TIER, hardTier: hard, effort: live.model.effort, router } }],
     proposeRun: null,
   });

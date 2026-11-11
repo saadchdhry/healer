@@ -1,4 +1,4 @@
-import type { CaseResult, EvalRun, GateRun, Job } from '@healer/agent';
+import { predictRoute, type CaseResult, type EvalRun, type GateRun, type Job, type Tier } from '@healer/agent';
 import { newId, now, type Healer } from './console.ts';
 import { runSuite } from './evalRunner.ts';
 import { isOpenProposal } from './propose.ts';
@@ -19,15 +19,24 @@ function failingDetail(result: CaseResult | undefined): string {
   return check ? ` In a failing trial, "${check.label}" failed: ${check.detail}` : '';
 }
 
-// Accept only if no case regressed, the pass rate did not drop, and (for a proposal fixing an issue)
-// at least one of that issue's eval cases passes on the candidate. A change made only to save money
-// (`costFirst`) is judged the same way, but its reasons lead with what it does to cost per task.
+// How a routed candidate sends the eval cases that belong to capability issues. Decided by the router's weights
+// alone, so unlike pass rates it does not depend on how the trials happened to fall.
+export interface RoutingCheck {
+  easyTier: Tier;
+  hardTier: Tier;
+  cases: { caseId: string; score: number; needsStrong: boolean }[];
+}
+
+// Accept only if no case regressed, the pass rate did not drop, (for a proposal fixing an issue) at least one
+// of that issue's eval cases passes on the candidate, and (for a routed model) every capability case goes to the
+// strong tier. A change made only to save money (`costFirst`) is judged the same way, but its reasons lead with
+// what it does to cost per task.
 export function decide(
   base: EvalRun,
   candidate: EvalRun,
   issueCaseIds: string[] | null,
   title: (caseId: string) => string,
-  { costFirst = false } = {},
+  { costFirst = false, routing = null }: { costFirst?: boolean; routing?: RoutingCheck | null } = {},
 ): GateDecision {
   const baseBy = new Map(base.results.map((r) => [r.caseId, r]));
   const common = candidate.results.filter((r) => baseBy.has(r.caseId));
@@ -45,6 +54,8 @@ export function decide(
   const issueCases = issueCaseIds ? candidate.results.filter((r) => issueCaseIds.includes(r.caseId)) : [];
   const issueFixed = issueCases.filter((r) => r.passed);
   if (issueCases.length && !issueFixed.length) failures.push("none of the issue's own eval cases passes");
+  const misrouted = routing?.cases.filter((c) => !c.needsStrong) ?? [];
+  if (misrouted.length) failures.push(`${misrouted.length} capability case${misrouted.length > 1 ? 's are' : ' is'} routed to ${routing!.easyTier}`);
 
   const n = common.length;
   const costChange = base.costPerTaskUsd ? ` (${candidate.costPerTaskUsd >= base.costPerTaskUsd ? '+' : ''}${pct(candidate.costPerTaskUsd / base.costPerTaskUsd - 1)})` : '';
@@ -67,6 +78,19 @@ export function decide(
     `Pass rate: ${pct(n ? basePassed / n : 0)} (${basePassed} of ${n} cases) on version ${base.versionId}, ${pct(n ? candPassed / n : 0)} (${candPassed} of ${n}) on version ${candidate.versionId} (${points ? `${points > 0 ? '+' : ''}${points} points` : 'no change'}).`,
   );
   if (!costFirst) reasons.push(`Cost per task: ${money(base.costPerTaskUsd)} on version ${base.versionId}, ${money(candidate.costPerTaskUsd)} on version ${candidate.versionId}${costChange}.`);
+  if (routing) {
+    const score = (c: RoutingCheck['cases'][number]) => `router score ${c.score.toFixed(2)}`;
+    for (const c of misrouted) {
+      reasons.push(`Misrouted: "${title(c.caseId)}" belongs to a capability issue, but the router sends it to ${routing.easyTier} (${score(c)}).`);
+    }
+    if (!misrouted.length) {
+      reasons.push(
+        routing.cases.length
+          ? `Routing: all ${routing.cases.length} capability case${routing.cases.length > 1 ? 's go' : ' goes'} to ${routing.hardTier} (${routing.cases.map(score).join(', ')}).`
+          : 'Routing: no enabled eval case belongs to a capability issue, so routing was not checked case by case.',
+      );
+    }
+  }
   for (const r of regressed) {
     reasons.push(`Regressed: "${title(r.caseId)}" passed on version ${base.versionId} and fails on version ${candidate.versionId} (${trials(r)}).${failingDetail(r)}`);
   }
@@ -117,7 +141,19 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
   const issue = proposal.issueId ? store.issues.get(proposal.issueId) : null;
   const issueCaseIds = issue ? issue.evalCaseIds.filter((id) => store.evalCases.get(id)?.enabled) : null;
   const costFirst = !issue && proposal.changes.every((c) => c.surface === 'model');
-  const result = decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id, { costFirst });
+  const model = store.versions.get(proposal.candidateVersionId)!.model;
+  const routing: RoutingCheck | null =
+    model.mode === 'routed'
+      ? {
+          easyTier: model.easyTier,
+          hardTier: model.hardTier,
+          cases: store.evalCases
+            .list()
+            .filter((c) => c.enabled && c.issueId && store.issues.get(c.issueId)?.cause === 'capability')
+            .map((c) => ({ caseId: c.id, ...predictRoute(model.router, c.message) })),
+        }
+      : null;
+  const result = decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id, { costFirst, routing });
   Object.assign(gateRun, result);
   store.gateRuns.put(gateRun);
 

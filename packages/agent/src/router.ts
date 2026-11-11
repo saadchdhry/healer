@@ -70,6 +70,10 @@ export function trainRouter(examples: RouterExample[], options: TrainRouterOptio
   };
   model.metrics.trainAccuracy = accuracy(model, train);
   model.metrics.valAccuracy = accuracy(model, val);
+  const valStrong = val.filter((e) => e.needsStrong);
+  model.metrics.trainPositives = train.filter((e) => e.needsStrong).length;
+  model.metrics.valPositives = valStrong.length;
+  model.metrics.valRecall = valStrong.length ? valStrong.filter((e) => predictRoute(model, e.text).needsStrong).length / valStrong.length : null;
   return model;
 }
 

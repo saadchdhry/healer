@@ -160,6 +160,11 @@ export interface RouterModel {
     trainAccuracy: number;
     valAccuracy: number;
     lossCurve: number[];
+    // Always set by trainRouter. Optional only because older stored routers and the web dev fixtures predate them.
+    trainPositives?: number;
+    valPositives?: number;
+    // Share of validation examples that needed the strong model and were routed to it; null when there are none.
+    valRecall?: number | null;
   };
 }
 

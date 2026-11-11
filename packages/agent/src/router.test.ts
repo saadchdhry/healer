@@ -29,6 +29,7 @@ test('router learns a separable toy set and the loss falls', () => {
   assert.equal(model.metrics.valSize, 2);
   assert.equal(model.metrics.trainAccuracy, 1);
   assert.equal(model.metrics.valAccuracy, 1);
+  assert.deepEqual([model.metrics.trainPositives, model.metrics.valPositives, model.metrics.valRecall], [3, 1, 1]);
   assert.equal(predictRoute(model, 'refund with discount please').needsStrong, true);
   assert.equal(predictRoute(model, 'where is my parcel').needsStrong, false);
 });
@@ -37,4 +38,9 @@ test('router training is deterministic', () => {
   const a = trainRouter(examples(), { createdAt: 't' });
   const b = trainRouter(examples(), { createdAt: 't' });
   assert.deepEqual(a, b);
+});
+
+test('recall is null when validation holds no request that needed the strong model', () => {
+  const model = trainRouter(examples().map((e) => (e.needsStrong && e.split === 'val' ? { ...e, split: 'train' as const } : e)));
+  assert.deepEqual([model.metrics.trainPositives, model.metrics.valPositives, model.metrics.valRecall], [4, 0, null]);
 });

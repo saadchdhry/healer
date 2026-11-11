@@ -286,10 +286,7 @@ export class HealerStore {
   }
 
   verdictCounts(): { passed: number; failed: number } {
-    // Router replays are judged only to label training data, so they are not counted as verdicts on traffic.
-    const row = this.db
-      .prepare("SELECT COALESCE(SUM(v.passed), 0) AS p, COUNT(*) AS n FROM verdicts v JOIN traces t ON t.id = v.trace_id WHERE t.source != 'replay'")
-      .get() as { p: number; n: number };
+    const row = this.db.prepare('SELECT COALESCE(SUM(passed), 0) AS p, COUNT(*) AS n FROM verdicts').get() as { p: number; n: number };
     return { passed: row.p, failed: row.n - row.p };
   }
 
