@@ -1,6 +1,6 @@
 # Healer: product brief
 
-Status: draft 5 (2026-11-11). All decisions settled. Build in progress.
+Status: draft 6 (2026-11-11). Built and running on localhost. One decision is open: how the router gets a real training signal (section 5). See section 7 for what the build found.
 
 ## Summary
 
@@ -172,7 +172,7 @@ Three parts, started with one command.
 
 *Real: training a small local classifier.* Moving every request to a bigger model fixes the hard cases and overpays for the easy ones. A small router decides, per request, whether the small model is enough. It is trained on the demo's own traces, which makes it a genuine case of supervised fine-tuning at toy scale.
 
-- Training data: past runs labelled by whether the small model passed. The labels come for free from eval runs the gate already performs on both tiers.
+- Training data: real customer messages replayed in a sandbox, four times on the small model and once on the large one. A request is labelled as needing the large model when a small-model replay breaks a policy rule or contradicts what the large model did. No model judge is involved, so the labels are cheap and repeatable.
 - The model: a bag-of-words classifier that trains in under a second on a few dozen examples. The viewer sees the training set, the loss curve, accuracy on held-out cases, and a new weights version.
 - The gate applies to weights too. A router that sends hard cases to the small model lowers the pass rate and is rejected. A good one holds the pass rate and cuts cost per task.
 - The customer simulator in section 4.3 supplies enough traffic to grow the training set.
@@ -220,7 +220,8 @@ Build risks:
 
 ### Open
 
-None.
+1. **The router's training signal.** As built, the router has nothing to learn (section 7). Options: label by risk (requests that end in a money-moving or irreversible action go to the large model), which is the recommendation; start the ladder from an older, weaker model to widen the gap; or leave the trainer showing an honest "nothing to learn yet".
+2. **Leftover scaffolding.** `web/src/dev/` (stand-in data used before the services existed) and `services/healer/src/stubs.ts` (now empty) can be deleted once the owner agrees.
 
 ## 6. Out of scope
 
@@ -230,10 +231,40 @@ None.
 - Multi-user accounts, authentication, deployment. Customers are picked from a list.
 - Production-grade observability. Traces live in a local file or local database.
 
-## 7. Change log
+## 7. What the build found
+
+How to run it is in `README.md`. This section records what turned out differently from the plan.
+
+**Works as designed, proven on live models.**
+
+- The full loop: a failed conversation is judged, diagnosed, turned into an eval case, fixed by a proposed change, gated, and deployed to the shop. Checked from the seeded late-refund case and from an unscripted chat in which the agent invented a currency.
+- The ratchet: a hand-written note saying "never issue refunds" is rejected because earlier cases regress.
+- All three surfaces change: context notes at shop and customer scope, harness changes, and a tier switch.
+- All three autonomy modes, rollback, the red-team probe, simulated customers, and seeded cases.
+- The separation of services: the shop keeps serving with the healer stopped, and the healer catches up afterwards.
+
+**Different from the plan.**
+
+- **The capability gap between tiers is narrow.** With the shop's rules in context, the small model matches the large one on ordinary requests. It errs only on the hardest ones, such as three orders in one message, and there only about once in 17 tries when last measured. The tier switch therefore buys the removal of a rare error at about 17 times the cost per task.
+- **The router has nothing to learn yet.** Across 160 replays the small model never contradicted the large one, so the training set had no positive examples and training correctly refused to run. The trainer, the labelling, and the gate check for routing are all built and tested. They are waiting for a signal.
+- **The agent learns shop policy from failed checks, not from a document.** Policy lives only as code checks in the healer. The proposer sees the wording of a failed check and writes the note from that, one rule at a time.
+
+**Known limits.**
+
+- Refunds that are too small, or never issued, break no rule and pass the judge. Only a thumbs-down or an eval with an exact amount catches them.
+- The judge and the diagnosis are models and vary. Diagnosis sometimes writes a check that is too strict, which makes the gate reject a good fix until the check is edited.
+- A failure rate of one in five is invisible to a gate running two or three trials per case. Raise trials per case when judging model changes.
+- Traffic changes the shop's live orders, so most seeded cases behave as described only after a reset.
+- Seeded cases can pass when the small model happens to get them right.
+- The default autonomy is "approve", so traffic alone starts paid judging, diagnosis, and gating. The console shows spend by role.
+
+**Cost.** Live testing during the build spent about $11.50. The judge is the largest share. A single failure taken from chat to deployed fix costs roughly $0.30 at three trials per case.
+
+## 8. Change log
 
 - 2026-11-11: Draft 1. Source framework captured from the talk, thinking framework proposed, demo concept and open decisions drafted.
 - 2026-11-11: Draft 2. Live Claude model confirmed. Model surface changed from a trained local classifier to a model switch, with a tier ladder, a loop-driven switch, and a visible training set proposed. Model roles added. Storyline grew to ten steps.
 - 2026-11-11: Draft 3. Small local classifier restored as a trained router alongside model switching. Manual model picker added. Summary added at the top. Framework diagram saved to `docs/self-learning-loop.svg` and embedded in section 3.
 - 2026-11-11: Draft 4. Router confirmed. Scenario, hand-written graph, and TypeScript settled. Guided tour dropped. Demo concept rewritten around two tabs (shop front and console), a clickable concept map with deep dives, lineage between objects, and a three-part architecture. Customer simulator and seeded cases proposed as traffic sources.
 - 2026-11-11: Draft 5. Traffic sources confirmed. No open decisions remain. Build started.
+- 2026-11-11: Draft 6. Build complete. Added section 7 with what the build found. Router labelling description updated to match what was built. Router training signal reopened as a decision.
