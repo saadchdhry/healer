@@ -1,0 +1,22 @@
+{
+  "name": "healer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "web"
+  ],
+  "scripts": {
+    "dev": "concurrently -n shop,healer,web -c green,magenta,cyan \"npm run dev -w @healer/shop\" \"npm run dev -w @healer/healer\" \"npm run dev -w @healer/web\"",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "concurrently": "^10.0.7",
+    "tsx": "^4.23.15",
+    "typescript": "^7.0.2"
+  }
+}

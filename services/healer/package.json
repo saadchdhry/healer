@@ -1,0 +1,16 @@
+{
+  "name": "@healer/healer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test \"src/**/*.test.ts\""
+  },
+  "dependencies": {
+    "@healer/agent": "*",
+    "@hono/node-server": "^2.1.7",
+    "hono": "^4.13.18"
+  }
+}
