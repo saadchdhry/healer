@@ -1,11 +1,12 @@
 import { DatabaseSync } from 'node:sqlite';
-import type { AgentVersion, ChatTurn, EnvSnapshot, Rating, ShopEvent, Trace } from '@healer/agent';
+import type { AgentVersion, ChatTurn, EnvSnapshot, Rating, ShopEvent, Trace, TraceSource } from '@healer/agent';
 
 export type StoredTurn = ChatTurn & { traceId: string | null; at: string };
 
 export interface StoredThread {
   id: string;
   customerId: string;
+  source: TraceSource;
   turns: StoredTurn[];
 }
 

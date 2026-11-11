@@ -940,6 +940,9 @@
   stroke-width: 1.5;
   fill: none;
 }
+.hc-map .edge.link {
+  stroke-dasharray: 5 4;
+}
 .hc-map .edge.feed {
   stroke: var(--rule);
   stroke-dasharray: 2 4;

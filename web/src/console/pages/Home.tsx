@@ -71,9 +71,9 @@ function LivePanel() {
 }
 
 const autonomyText: Record<Autonomy, string> = {
-  manual: 'You drive every step. Nothing runs on its own.',
+  manual: 'The judge still scores every conversation. Every later step waits for you, starting with Run diagnosis on the Diagnose page.',
   approve: 'The loop judges, diagnoses, proposes and gates in the background. You approve each promotion.',
-  auto: 'The loop promotes any candidate the gate accepts. The North Star, not the norm today.',
+  auto: 'The loop promotes any candidate its own gate accepts. A gate you start by hand still waits for your approval. The North Star, not the norm today.',
 };
 
 export function AutonomyPanel() {

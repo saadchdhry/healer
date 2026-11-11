@@ -94,8 +94,14 @@ export function createShopApp(options: ShopOptions) {
     return c.json<Res<'GET /api/shop/customers/:id/orders'>>(env.ordersFor(c.req.param('id')));
   });
 
+  // The shop front lists only conversations a person started there. Seeded and simulated customers use the same chat but would look like chats the visitor never had.
   app.get('/api/shop/customers/:id/threads', (c) =>
-    c.json<Res<'GET /api/shop/customers/:id/threads'>>(store.threadsFor(c.req.param('id')).map(threadView)),
+    c.json<Res<'GET /api/shop/customers/:id/threads'>>(
+      store
+        .threadsFor(c.req.param('id'))
+        .filter((t) => t.source === 'shop')
+        .map(threadView),
+    ),
   );
 
   app.post('/api/shop/chat', async (c) => {
@@ -114,7 +120,7 @@ export function createShopApp(options: ShopOptions) {
     if (!llm) return c.json({ error: 'missing_api_key', message: 'No ANTHROPIC_API_KEY is set, so the support agent cannot reply' }, 503);
 
     return serialised(async () => {
-      const thread: StoredThread = existing ? store.thread(existing.id)! : { id: `th_${crypto.randomUUID()}`, customerId, turns: [] };
+      const thread: StoredThread = existing ? store.thread(existing.id)! : { id: `th_${crypto.randomUUID()}`, customerId, source, turns: [] };
       const traceId = `tr_${crypto.randomUUID()}`;
       emit({ type: 'trace.started', traceId, threadId: thread.id, customerId, source, message });
       const trace = await runAgent({

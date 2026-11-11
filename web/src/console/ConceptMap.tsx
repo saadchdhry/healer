@@ -46,14 +46,23 @@ const fallbackLoop: GraphShape = {
   entry: 'run',
   nodes: [],
   edges: [
-    { from: 'run', to: 'judge' },
     { from: 'judge', to: 'diagnose' },
     { from: 'diagnose', to: 'propose' },
     { from: 'propose', to: 'gate' },
     { from: 'gate', to: 'promote' },
-    { from: 'promote', to: 'run' },
   ],
 };
+
+// The only pairs the layout can join with a straight segment that crosses no block. Other paths are listed under the map.
+const DRAWN = new Set(['judge>diagnose', 'diagnose>propose', 'propose>gate', 'gate>propose', 'gate>promote']);
+
+// Not part of the healer's graph: these two cross between the shop and the healer, and are the whole contract between them.
+const LINKS = [
+  { from: 'run', to: 'judge', label: 'trace' },
+  { from: 'promote', to: 'run', label: 'new version' },
+];
+const SHORT_LABEL = 8;
+const LONG_LABEL = 24;
 const fixedDesc: Partial<Record<BlockId, string>> = {
   run: 'The agent acts',
   judge: 'Was it good?',
@@ -75,6 +84,7 @@ interface EdgeGeom {
   d: string;
   lx: number;
   ly: number;
+  vertical: boolean;
 }
 
 function edgeGeom(from: string, to: string): EdgeGeom | null {
@@ -84,27 +94,25 @@ function edgeGeom(from: string, to: string): EdgeGeom | null {
   if (!a || !b) return null;
   if (from === 'promote' && to === 'run') {
     const x = b.x + b.w / 2;
-    return { d: `M${x},${a.y - 2} V${b.y + b.h + 6}`, lx: x + 8, ly: (a.y + b.y + b.h) / 2 + 4 };
+    return { d: `M${x},${a.y - 2} V${b.y + b.h + 6}`, lx: x + 8, ly: (a.y + b.y + b.h) / 2 + 4, vertical: true };
   }
   if (to === 'promote') {
     const y = a.y + a.h / 2;
-    return { d: `M${a.x - 2},${y} H${b.x + b.w + 6}`, lx: (a.x + b.x + b.w) / 2, ly: y - 8 };
+    return { d: `M${a.x - 2},${y} H${b.x + b.w + 6}`, lx: (a.x + b.x + b.w) / 2, ly: y - 8, vertical: false };
   }
   if (Math.abs(a.y - b.y) < 1) {
     const y = a.y + a.h / 2;
     const [l, r] = a.x < b.x ? [a.x + a.w, b.x] : [a.x, b.x + b.w];
-    return { d: `M${l + 2},${y} H${a.x < b.x ? r - 6 : r + 6}`, lx: (l + r) / 2, ly: y - 8 };
+    return { d: `M${l + 2},${y} H${a.x < b.x ? r - 6 : r + 6}`, lx: (l + r) / 2, ly: y - 8, vertical: false };
   }
   if (Math.abs(a.x - b.x) < 1) {
-    const x = a.x + a.w / 2;
-    const [t, u] = a.y < b.y ? [a.y + a.h, b.y] : [a.y, b.y + b.h];
-    return { d: `M${x},${t + 2} V${a.y < b.y ? u - 6 : u + 6}`, lx: x + 8, ly: (t + u) / 2 + 4 };
+    // Down and up between the same two blocks sit side by side, so a retry reads as its own arrow.
+    const down = a.y < b.y;
+    const x = a.x + a.w / 2 + (down ? -10 : 10);
+    const [t, u] = down ? [a.y + a.h, b.y] : [a.y, b.y + b.h];
+    return { d: `M${x},${down ? t + 2 : t - 2} V${down ? u - 6 : u + 6}`, lx: x + 8, ly: (t + u) / 2 + 4, vertical: true };
   }
-  const ax = a.x + a.w / 2;
-  const bx = b.x + b.w / 2;
-  const ay = a.y + a.h;
-  const by = b.y;
-  return { d: `M${ax},${ay + 2} C${ax},${ay + 40} ${bx},${by - 40} ${bx},${by - 6}`, lx: (ax + bx) / 2, ly: (ay + by) / 2 };
+  return null;
 }
 
 export function ConceptMap({ overview, active, loop }: { overview: Overview | null; active: Set<LoopStage>; loop: GraphShape | null }) {
@@ -175,6 +183,11 @@ export function ConceptMap({ overview, active, loop }: { overview: Overview | nu
 
   const liveTier = overview ? (overview.liveModel.mode === 'fixed' ? tierName[overview.liveModel.tier] : 'Routed') : '…';
   const n = (v: number | undefined) => (v === undefined ? '…' : String(v));
+  const isDrawn = (e: GraphShape['edges'][number]) => DRAWN.has(`${e.from}>${e.to}`);
+  // A gap between blocks fits a word across and a short phrase down; longer labels go to the list under the map.
+  const labelOnMap = (e: GraphShape['edges'][number], g: EdgeGeom) => (e.label && e.label.length <= (g.vertical ? LONG_LABEL : SHORT_LABEL) ? e.label : undefined);
+  const stageName = (id: string) => (id === '__end__' ? 'stop' : (graph.nodes.find((nd) => nd.id === id)?.label ?? id));
+  const listed = graph.edges.filter((e) => e.label && (!isDrawn(e) || !labelOnMap(e, edgeGeom(e.from, e.to)!)));
   const extraNodes = graph.nodes.filter((nd) => !(nd.id in pos) && nd.id !== 'promote');
 
   return (
@@ -197,16 +210,26 @@ export function ConceptMap({ overview, active, loop }: { overview: Overview | nu
           Foundations under every stage
         </text>
 
-        {graph.edges.map((e, i) => {
-          const g = edgeGeom(e.from, e.to);
-          if (!g) return null;
-          const hot = e.from === 'promote' ? promoteHot : active.has(e.from as LoopStage);
-          const text = e.from === 'promote' ? (e.label ?? 'new version') : e.to === 'promote' ? (e.label ?? 'promote') : e.label;
+        {LINKS.map((l) => {
+          const g = edgeGeom(l.from, l.to)!;
+          const hot = l.from === 'promote' ? promoteHot : active.has('run');
+          return (
+            <g key={l.from}>
+              <path className={`edge link${hot ? ' hot' : ''}`} d={g.d} markerEnd="url(#hc-arrow)" />
+              <text className="t-edge" x={g.lx} y={g.ly} textAnchor={g.vertical ? 'start' : 'middle'}>
+                {l.label}
+              </text>
+            </g>
+          );
+        })}
+        {graph.edges.filter(isDrawn).map((e, i) => {
+          const g = edgeGeom(e.from, e.to)!;
+          const text = labelOnMap(e, g);
           return (
             <g key={i}>
-              <path className={`edge${hot ? ' hot' : ''}`} d={g.d} markerEnd="url(#hc-arrow)" />
+              <path className={`edge${active.has(e.from as LoopStage) ? ' hot' : ''}`} d={g.d} markerEnd="url(#hc-arrow)" />
               {text && (
-                <text className="t-edge" x={g.lx} y={g.ly} textAnchor={e.from === 'promote' || e.from === 'propose' ? 'start' : 'middle'}>
+                <text className="t-edge" x={g.lx} y={g.ly} textAnchor={g.vertical ? 'start' : 'middle'}>
                   {text}
                 </text>
               )}
@@ -229,6 +252,12 @@ export function ConceptMap({ overview, active, loop }: { overview: Overview | nu
         {block('traces', 'Traces', n(c?.traces), 'traces recorded, each a full record of one reply', { kind: 'found' })}
         {block('evals', 'Eval suite', n(c?.evalCases), overview ? `cases. Live version passes ${pct(overview.latestPassRate)}` : 'cases', { kind: 'found' })}
       </svg>
+      {listed.length > 0 && (
+        <p className="hc-muted" style={{ margin: '6px 0 0' }}>
+          Other paths in the loop's code:{' '}
+          {listed.map((e) => `${stageName(e.from)} → ${stageName(e.to)} (${e.label})`).join('; ')}. Dashed arrows cross between the shop and the healer.
+        </p>
+      )}
       {extraNodes.length > 0 && (
         <p className="hc-muted" style={{ margin: '6px 0 0' }}>
           Also in the loop graph but not drawn on the map: {extraNodes.map((x) => `${x.label} (${x.description})`).join('; ')}.
