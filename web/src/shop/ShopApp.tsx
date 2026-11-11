@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { Customer, Order, Rating } from '@healer/agent';
-import { call, isMissingKey } from '../lib/api.ts';
+import { ApiError, call, isMissingKey } from '../lib/api.ts';
 import { useApi } from '../lib/hooks.ts';
 import { date, money } from '../lib/format.ts';
 import './shop.css';
@@ -59,7 +59,10 @@ export function ShopApp() {
 
       {customers.error ? (
         <div className="pm-shell">
-          <p className="pm-calm">The shop is not answering right now. Check that the shop service is running, then reload this page.</p>
+          <p className="pm-calm">
+            The shop is not answering right now. Check that the shop service is running, then reload this page.
+            {customers.error instanceof ApiError && customers.error.status !== 0 && ` The shop said: ${customers.error.message}`}
+          </p>
         </div>
       ) : !current ? (
         <div className="pm-shell">
@@ -99,7 +102,10 @@ function Orders({ customer }: { customer: Customer }) {
         Member since {date(customer.memberSince)}. Here is everything you have ordered from us.
       </p>
       {orders.error ? (
-        <p className="pm-calm">We could not load your orders just now. Try again in a moment.</p>
+        <p className="pm-calm">
+          We could not load your orders just now. Try again in a moment.
+          {orders.error instanceof ApiError && orders.error.status !== 0 && ` The shop said: ${orders.error.message}`}
+        </p>
       ) : orders.loading ? (
         <p className="pm-calm">Fetching your orders…</p>
       ) : !orders.data?.length ? (
@@ -181,6 +187,7 @@ function Chat({ customer }: { customer: Customer }) {
   const [draft, setDraft] = useState('');
   const [pending, setPending] = useState(false);
   const [problem, setProblem] = useState<'offline' | 'failed' | null>(null);
+  const [reason, setReason] = useState('');
   const logRef = useRef<HTMLDivElement>(null);
   const threads = useApi('GET /api/shop/customers/:id/threads', [{ params: { id: customer.id } }]);
 
@@ -209,6 +216,7 @@ function Chat({ customer }: { customer: Customer }) {
       setTurns((t) => [...t, { role: 'agent', text: res.reply, traceId: res.traceId, rating: null }]);
     } catch (err) {
       setProblem(isMissingKey(err) ? 'offline' : 'failed');
+      setReason(err instanceof ApiError ? err.message : '');
     } finally {
       setPending(false);
     }
@@ -220,8 +228,10 @@ function Chat({ customer }: { customer: Customer }) {
     setTurns((t) => t.map((x, i) => (i === index ? { ...x, rating } : x)));
     try {
       await call('POST /api/shop/feedback', { body: { traceId: turn.traceId, rating } });
-    } catch {
+    } catch (err) {
       setTurns((t) => t.map((x, i) => (i === index ? { ...x, rating: turn.rating } : x)));
+      setProblem('failed');
+      setReason(err instanceof ApiError ? err.message : '');
     }
   }
 
@@ -251,7 +261,7 @@ function Chat({ customer }: { customer: Customer }) {
         )}
         {turns.map((t, i) => (
           <div key={i} className={`pm-bubble ${t.role}`}>
-            <p>{t.text}</p>
+            <p>{t.role === 'agent' ? withBold(t.text) : t.text}</p>
             {t.role === 'agent' && t.traceId && (
               <div className="pm-rate" role="group" aria-label="Was this helpful?">
                 <button type="button" aria-pressed={t.rating === 'up'} aria-label="Helpful" onClick={() => rate(i, 'up')}>
@@ -277,7 +287,11 @@ function Chat({ customer }: { customer: Customer }) {
             Our assistant is offline at the moment. It comes back once an API key is added to the <code>.env</code> file.
           </p>
         )}
-        {problem === 'failed' && <p className="pm-note">That message did not go through. Please try sending it again.</p>}
+        {problem === 'failed' && (
+          <p className="pm-note">
+            That did not go through. Please try again.{reason && <span className="pm-reason"> The shop said: {reason}</span>}
+          </p>
+        )}
       </div>
       <form className="pm-compose" onSubmit={send}>
         <label className="pm-sr" htmlFor="pm-msg">
@@ -299,6 +313,11 @@ function Chat({ customer }: { customer: Customer }) {
       </form>
     </section>
   );
+}
+
+// The agent writes light markdown; the shop shows its bold and leaves the rest as plain text.
+function withBold(text: string) {
+  return text.split(/\*\*(.+?)\*\*/g).map((part, i) => (i % 2 ? <strong key={i}>{part}</strong> : part));
 }
 
 function Thumb({ down = false }: { down?: boolean }) {

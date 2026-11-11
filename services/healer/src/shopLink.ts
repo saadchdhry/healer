@@ -173,7 +173,7 @@ export async function handleShopEvent(h: Healer, event: ShopEvent, resetLocal: (
       if (store.hasTrace(trace.id)) break;
       store.saveTrace(trace);
       h.recordTraceCost(trace.runs);
-      h.activity('run', trace.error ? `A conversation failed to run: ${trace.error}` : `${trace.customerId} wrote: "${trace.input.slice(0, 80)}"`, {
+      h.activity('run', trace.error ? `A conversation failed to run: ${trace.error}` : `${trace.envBefore.customers.find((c) => c.id === trace.customerId)?.name ?? trace.customerId} (${trace.source}) wrote: "${trace.input.slice(0, 80)}"`, {
         kind: 'trace',
         id: trace.id,
         label: trace.input.slice(0, 60),

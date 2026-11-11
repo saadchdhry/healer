@@ -373,6 +373,7 @@
 .hc-input,
 .hc-select,
 .hc-textarea {
+  max-width: 100%;
   font: 13px 'Geist', system-ui, sans-serif;
   color: var(--ink);
   background: var(--panel);
@@ -1016,6 +1017,16 @@
 .hc-home-col .hc-panel > h3 {
   display: flex;
   justify-content: space-between;
+}
+@media (max-width: 1360px) {
+  .hc-home {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 900px) {
+  .hc-home {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 /* ── Charts ───────────────────────────────────────────────────────────── */

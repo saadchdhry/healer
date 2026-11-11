@@ -1,7 +1,7 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { RouterModel, Tier } from '@healer/agent';
-import { call } from '../../lib/api.ts';
+import { ApiError, call } from '../../lib/api.ts';
 import { useAction, useApi } from '../../lib/hooks.ts';
 import { dateTime, modelLabel, pct, tierName } from '../../lib/format.ts';
 import { useConsole } from '../stream.tsx';
@@ -13,13 +13,22 @@ const tiers: Tier[] = ['haiku', 'sonnet', 'opus'];
 
 export function ModelPage() {
   const q = useApi('GET /api/healer/model', [], ['version', 'evalRun']);
-  const { jobs, trackJob, refreshOverview } = useConsole();
+  const { overview, jobs, trackJob, refreshOverview } = useConsole();
+  const liveId = overview?.liveVersionId;
+  const liveVersion = useApi('GET /api/healer/versions/:id', [{ params: { id: liveId ?? 0 } }], ['version'], liveId !== undefined);
   const [maxExamples, setMax] = useState(40);
   const [selected, setSelected] = useState<string | null>(null);
   const [confirmTier, setConfirmTier] = useState<Tier | null>(null);
   const act = useAction();
+  const [trainNote, setTrainNote] = useState<string | null>(null);
   const navigate = useNavigate();
   const datasetJob = jobs.find((j) => j.kind === 'router_dataset' && j.status === 'running');
+  const lastDataset = jobs.find((j) => j.kind === 'router_dataset');
+  const lastDatasetKey = lastDataset ? `${lastDataset.id}:${lastDataset.status}` : '';
+  const reload = q.reload;
+  useEffect(() => {
+    if (lastDatasetKey && !lastDatasetKey.endsWith(':running')) reload();
+  }, [lastDatasetKey, reload]);
 
   return (
     <>
@@ -40,6 +49,18 @@ export function ModelPage() {
                 <Layer title="Live model config">
                   <div className="hc-panel hc-stack">
                     <div style={{ fontSize: 16 }}>{modelLabel(m.live)}</div>
+                    {liveVersion.data && (
+                      <p className="hc-muted" style={{ margin: 0, fontSize: 13 }}>
+                        Live version <IdLink kind="version" id={liveVersion.data.version.id} />.{' '}
+                        {liveVersion.data.version.author === 'factory' ? (
+                          'The factory version.'
+                        ) : liveVersion.data.version.gated ? (
+                          'It passed the gate before it was deployed.'
+                        ) : (
+                          <span style={{ color: 'var(--warn)' }}>Deployed without the gate, so no eval run vouches for it.</span>
+                        )}
+                      </p>
+                    )}
                     <div>
                       <div className="hc-field" style={{ marginBottom: 6 }}>
                         Manual tier picker
@@ -111,7 +132,7 @@ export function ModelPage() {
                 <div className="hc-row" style={{ marginBottom: 12 }}>
                   <label className="hc-row" style={{ fontSize: 13 }}>
                     Up to
-                    <input className="hc-input" type="number" min={4} max={500} value={maxExamples} onChange={(e) => setMax(Number(e.target.value))} style={{ width: 72 }} />
+                    <input className="hc-input" type="number" min={4} max={200} aria-label="Most examples to build" value={maxExamples} onChange={(e) => setMax(Number(e.target.value))} style={{ width: 72 }} />
                     examples
                   </label>
                   <button type="button" className="hc-btn" disabled={act.busy || !!datasetJob} onClick={() => act.run(async () => trackJob(await call('POST /api/healer/model/router/dataset', { body: { maxExamples } })))}>
@@ -123,9 +144,15 @@ export function ModelPage() {
                     disabled={act.busy || m.dataset.length < 4}
                     onClick={() =>
                       act.run(async () => {
-                        const r = await call('POST /api/healer/model/router/train');
-                        setSelected(r.id);
-                        q.reload();
+                        setTrainNote(null);
+                        try {
+                          const r = await call('POST /api/healer/model/router/train');
+                          setSelected(r.id);
+                          q.reload();
+                        } catch (e) {
+                          if (e instanceof ApiError && e.status === 409) setTrainNote(e.message);
+                          else throw e;
+                        }
                       })
                     }
                   >
@@ -146,6 +173,15 @@ export function ModelPage() {
                   </button>
                 </div>
                 <ActionError error={act.error} />
+                {trainNote && (
+                  <div className="hc-panel" role="status" style={{ marginBottom: 12 }}>
+                    <strong>Nothing to train on yet.</strong> {trainNote}
+                    <p className="hc-muted" style={{ margin: '6px 0 0', fontSize: 12.5 }}>
+                      This is an expected state, not a fault. A router only learns something when some requests failed on the small tier and passed on the strong one.
+                      The dataset that was built is listed below.
+                    </p>
+                  </div>
+                )}
                 {datasetJob && (
                   <div className="hc-panel" style={{ marginBottom: 12 }}>
                     <JobProgress job={datasetJob} />
@@ -168,9 +204,21 @@ export function ModelPage() {
                           <dd className="mono">
                             {pct(router.metrics.valAccuracy)} on {router.metrics.valSize} held out
                           </dd>
+                          <dt>Needed the strong tier</dt>
+                          <dd className="mono">
+                            {router.metrics.trainPositives} of {router.metrics.trainSize} in training, {router.metrics.valPositives} of {router.metrics.valSize} in validation
+                          </dd>
+                          <dt>Hard requests caught</dt>
+                          <dd className="mono">{router.metrics.valRecall === null ? 'no hard requests held out' : `${pct(router.metrics.valRecall)} of held-out hard requests sent to the strong tier`}</dd>
                           <dt>Threshold</dt>
                           <dd className="mono">{router.threshold}</dd>
                         </dl>
+                        {router.metrics.valPositives === 0 && (
+                          <p className="hc-muted" style={{ margin: '8px 0 0', fontSize: 12.5 }}>
+                            None of the held-out requests needed the strong tier, so validation accuracy says nothing about hard requests: a router that sends
+                            everything to the small tier would score the same.
+                          </p>
+                        )}
                       </>
                     ) : (
                       <Empty>No router trained yet. Build a dataset, then train.</Empty>
@@ -212,7 +260,10 @@ export function ModelPage() {
                 </div>
               </Layer>
 
-              <Layer title="Labelled examples" aside={`${train.length} train, ${val.length} validation`}>
+              <Layer
+                title="Labelled examples"
+                aside={`${train.length} train, ${val.length} validation. ${m.dataset.filter((d) => d.needsStrong).length} need the strong tier, ${m.dataset.filter((d) => !d.needsStrong).length} are fine on the small one`}
+              >
                 {m.dataset.length ? (
                   <table className="hc-table">
                     <thead>

@@ -16,9 +16,7 @@ export function Failed({ error, retry }: { error: unknown; retry?: () => void })
     error instanceof ApiError
       ? error.status === 0
         ? 'The healer service is not answering. Start it, then retry.'
-        : error.status === 404
-          ? 'Nothing exists with this id.'
-          : error.message
+        : error.message
       : 'The request failed.';
   return (
     <div className="hc-row">

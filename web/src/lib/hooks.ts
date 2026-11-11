@@ -3,6 +3,8 @@ import type { RefKind } from '@healer/agent';
 import { call, type CallArgs, type Res, type RouteKey } from './api.ts';
 
 type ChangeListener = (kinds: RefKind[]) => void;
+// Sent after the live stream comes back from a gap: every query refetches, whatever it listens for.
+export const RESYNC: RefKind[] = [];
 export const ChangeBus = createContext<{ subscribe: (fn: ChangeListener) => () => void } | null>(null);
 
 export interface Loaded<T> {
@@ -46,12 +48,12 @@ export function useApi<K extends RouteKey>(
   const bus = useContext(ChangeBus);
   const kinds = refetchOn.join(',');
   useEffect(() => {
-    if (!bus || !kinds) return;
+    if (!bus || !enabled) return;
     const wanted = kinds.split(',');
     return bus.subscribe((changed) => {
-      if (changed.some((k) => wanted.includes(k))) setTick((t) => t + 1);
+      if (changed === RESYNC || changed.some((k) => wanted.includes(k))) setTick((t) => t + 1);
     });
-  }, [bus, kinds]);
+  }, [bus, kinds, enabled]);
 
   const reload = useCallback(() => setTick((t) => t + 1), []);
   return { data, error, loading: loading && data === undefined, reload };

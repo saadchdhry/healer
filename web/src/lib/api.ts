@@ -61,6 +61,8 @@ export async function call<K extends RouteKey>(key: K, ...[opts]: CallArgs<K>): 
   }
   const text = await res.text();
   const data: unknown = text ? safeJson(text) : null;
+  // The dev proxy answers for a service that is down with an empty 5xx body.
+  if (!res.ok && data === null && res.status >= 500) throw new ApiError(0, 'unreachable', 'The service did not answer. Is it running?');
   if (!res.ok) {
     const err = (data ?? {}) as { error?: string; message?: string };
     throw new ApiError(res.status, err.error ?? null, err.message ?? err.error ?? `Request failed with status ${res.status}`);

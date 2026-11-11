@@ -1,4 +1,5 @@
-import { Link, useParams, useSearchParams } from 'react-router-dom';
+import { useEffect } from 'react';
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
 import type { EnvSnapshot, TraceSource } from '@healer/agent';
 import { call } from '../../lib/api.ts';
 import { useAction, useApi } from '../../lib/hooks.ts';
@@ -8,7 +9,16 @@ import { RatingMark, TraceTable, useCustomers } from '../components/TraceTable.t
 import { TraceTimeline } from '../components/TraceTimeline.tsx';
 import { CheckList, IdLink, Json, Layer, LineageStrip, PageHead, RawRun, VerdictBadge } from '../components/ui.tsx';
 
-const sources: TraceSource[] = ['shop', 'simulator', 'seed', 'eval', 'redteam', 'replay'];
+const sourceWord: Record<TraceSource, string> = {
+  shop: 'Shop front',
+  simulator: 'Simulated customers',
+  seed: 'Seeded cases',
+  eval: 'Eval runs (sandbox)',
+  redteam: 'Red team probes (sandbox)',
+  replay: 'Router replays (sandbox)',
+};
+const liveSources: TraceSource[] = ['shop', 'simulator', 'seed'];
+const sandboxSources: TraceSource[] = ['eval', 'redteam', 'replay'];
 
 export function TracesPage() {
   const [sp, setSp] = useSearchParams();
@@ -20,7 +30,7 @@ export function TracesPage() {
   const { list: customers } = useCustomers();
   const traces = useApi(
     'GET /api/healer/traces',
-    [{ query: { source: source || undefined, verdict: verdict || undefined, versionId: versionId ? Number(versionId) : undefined, limit: 500 } }],
+    [{ query: { source: source || undefined, verdict: verdict || undefined, versionId: versionId ? Number(versionId) : undefined, customerId: customer || undefined, limit: 500 } }],
     ['trace', 'verdict'],
   );
   const set = (k: string, v: string) => {
@@ -29,7 +39,7 @@ export function TracesPage() {
     else n.delete(k);
     setSp(n, { replace: true });
   };
-  const rows = traces.data?.filter((t) => !customer || t.customerId === customer);
+  const rows = traces.data;
 
   return (
     <>
@@ -42,10 +52,21 @@ export function TracesPage() {
           <label className="hc-field">
             Source
             <select className="hc-select" value={source} onChange={(e) => set('source', e.target.value)}>
-              <option value="">All sources</option>
-              {sources.map((s) => (
-                <option key={s}>{s}</option>
-              ))}
+              <option value="">All customer traffic</option>
+              <optgroup label="Customer traffic">
+                {liveSources.map((s) => (
+                  <option key={s} value={s}>
+                    {sourceWord[s]}
+                  </option>
+                ))}
+              </optgroup>
+              <optgroup label="Sandbox, never touches the live shop">
+                {sandboxSources.map((s) => (
+                  <option key={s} value={s}>
+                    {sourceWord[s]}
+                  </option>
+                ))}
+              </optgroup>
             </select>
           </label>
           <label className="hc-field">
@@ -83,6 +104,9 @@ export function TracesPage() {
         <Q q={traces} what="traces">
           {() => (rows?.length ? <TraceTable traces={rows} /> : <Empty>No traces match these filters. Clear a filter, or send traffic from the map page.</Empty>)}
         </Q>
+        <p className="hc-muted" style={{ margin: '10px 0 0', fontSize: 12.5 }}>
+          Traces the healer makes in its own sandbox (eval runs, red team probes and router replays) are kept out of customer traffic. Pick one in Source to see them.
+        </p>
       </Layer>
     </>
   );
@@ -142,6 +166,11 @@ export function TraceDetailPage() {
   const q = useApi('GET /api/healer/traces/:id', [{ params: { id } }], ['trace', 'verdict']);
   const { name } = useCustomers();
   const rejudge = useAction();
+  const { hash } = useLocation();
+  const loaded = q.data !== undefined;
+  useEffect(() => {
+    if (loaded && hash) document.getElementById(hash.slice(1))?.scrollIntoView({ block: 'start' });
+  }, [loaded, hash]);
 
   return (
     <Q q={q} what="the trace">
@@ -169,7 +198,7 @@ export function TraceDetailPage() {
               <h3>Summary</h3>
               <dl className="hc-kv">
                 <dt>Verdict</dt>
-                <dd>{verdict ? <IdLink kind="verdict" id={verdict.id}><VerdictBadge state={verdict.passed ? 'pass' : 'fail'} /></IdLink> : <VerdictBadge state="pending" />}</dd>
+                <dd>{verdict ? <Link to={{ hash: 'verdict' }}><VerdictBadge state={verdict.passed ? 'pass' : 'fail'} /></Link> : <VerdictBadge state="pending" />}</dd>
                 <dt>Customer rating</dt>
                 <dd>
                   <RatingMark rating={rating} />
@@ -247,6 +276,7 @@ export function TraceDetailPage() {
             </details>
           </Layer>
           <Layer
+            id="verdict"
             title="Verdict"
             aside={
               <button type="button" className="hc-btn" disabled={rejudge.busy} onClick={() => rejudge.run(async () => { await call('POST /api/healer/traces/:id/judge', { params: { id: trace.id } }); q.reload(); })}>

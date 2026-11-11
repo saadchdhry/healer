@@ -32,7 +32,7 @@ export function ContextPage() {
   const latest = useApi('GET /api/healer/traces/:id', [{ params: { id: latestId ?? '' } }], [], latestId !== undefined);
   const { name } = useCustomers();
   const live = versions.data?.find((v) => v.id === overview?.liveVersionId) ?? versions.data?.find((v) => v.status === 'live');
-  const loadRun = latest.data?.trace.runs.find((r) => r.name === 'load_context');
+  const loadRun = latest.data?.trace.runs.find((r) => r.name === 'assemble_context');
 
   const groups = new Map<string, MemoryNote[]>();
   for (const n of live?.context ?? []) {
@@ -119,8 +119,16 @@ export function ContextPage() {
           }}
         </Q>
       </Layer>
-      <Layer title="Raw workings" aside={latestId ? `How notes reached the agent in ${latestId}` : undefined} raw>
-        {loadRun ? <RawRun run={loadRun} title="load_context" open /> : <Empty>Once a conversation arrives, the exact notes loaded for it are shown here.</Empty>}
+      <Layer
+        title="Raw workings"
+        aside={
+          latest.data
+            ? `How notes reached the agent in the latest conversation, ${latest.data.trace.id}, answered by version ${latest.data.trace.versionId}${latest.data.trace.versionId !== live?.id ? '. It ran before the live version, so newer notes are not in it' : ''}`
+            : undefined
+        }
+        raw
+      >
+        {loadRun ? <RawRun run={loadRun} title="assemble_context: the system prompt as the model received it" open /> : <Empty>Once a conversation arrives, the exact notes loaded for it are shown here.</Empty>}
       </Layer>
     </>
   );

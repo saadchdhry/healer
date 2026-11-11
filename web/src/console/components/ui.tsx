@@ -9,7 +9,7 @@ export function refPath(kind: RefKind, id: string): string {
     case 'trace':
       return `/console/traces/${e}`;
     case 'verdict':
-      return `/console/judge?verdict=${e}`;
+      return `/console/verdicts/${e}`;
     case 'issue':
       return `/console/issues/${e}`;
     case 'proposal':
@@ -23,7 +23,7 @@ export function refPath(kind: RefKind, id: string): string {
     case 'evalRun':
       return `/console/eval-runs/${e}`;
     case 'finding':
-      return `/console/judge?finding=${e}`;
+      return `/console/findings/${e}`;
   }
 }
 
@@ -101,9 +101,9 @@ export function PageHead({ title, crumb, accent, children }: { title: ReactNode;
   );
 }
 
-export function Layer({ title, aside, raw, children }: { title: ReactNode; aside?: ReactNode; raw?: boolean; children: ReactNode }) {
+export function Layer({ title, aside, raw, id, children }: { title: ReactNode; aside?: ReactNode; raw?: boolean; id?: string; children: ReactNode }) {
   return (
-    <section className={`hc-layer${raw ? ' hc-raw-layer' : ''}`}>
+    <section id={id} className={`hc-layer${raw ? ' hc-raw-layer' : ''}`}>
       <h2>
         {title}
         {aside && <span className="hc-aside">{aside}</span>}
@@ -183,6 +183,12 @@ export function CheckList({ checks }: { checks: CheckResult[] }) {
   );
 }
 
+const jobRef: Partial<Record<Job['kind'], { kind: RefKind; word: string }>> = {
+  gate: { kind: 'proposal', word: 'For proposal' },
+  propose: { kind: 'issue', word: 'For issue' },
+  eval: { kind: 'evalRun', word: 'Eval run' },
+};
+
 export function JobProgress({ job }: { job: Job }) {
   const pctDone = job.progress.total ? (job.progress.done / job.progress.total) * 100 : 0;
   return (
@@ -191,16 +197,16 @@ export function JobProgress({ job }: { job: Job }) {
         <span>{job.label}</span>
         <span className="hc-spacer" />
         <span className="hc-muted mono">
-          {job.status === 'running' ? `${job.progress.done} of ${job.progress.total}` : job.status === 'done' ? 'done' : 'failed'}
+          {job.status === 'running' ? (job.progress.total ? `${job.progress.done} of ${job.progress.total}` : 'starting') : job.status === 'done' ? 'done' : 'failed'}
         </span>
       </div>
       <div className={`hc-bar ${job.status}`} role="progressbar" aria-valuenow={job.progress.done} aria-valuemax={job.progress.total}>
         <span style={{ width: `${job.status === 'failed' ? 100 : pctDone}%` }} />
       </div>
       {job.error && <p className="hc-error" style={{ margin: 0 }}>{job.error}</p>}
-      {job.refId && job.kind === 'gate' && (
+      {job.refId && jobRef[job.kind] && (
         <span className="hc-muted">
-          Gate run <IdLink kind="gateRun" id={job.refId} />
+          {jobRef[job.kind]!.word} <IdLink kind={jobRef[job.kind]!.kind} id={job.refId} />
         </span>
       )}
     </div>
@@ -217,6 +223,11 @@ const lineageCols: { key: keyof Lineage; label: string }[] = [
   { key: 'evalCases', label: 'Eval cases' },
 ];
 
+function refLabel(r: Ref): string {
+  const text = r.kind === 'version' ? r.label.replace(new RegExp(`^v${r.id}:?\\s*`), '') : r.label;
+  return text === r.id ? '' : text;
+}
+
 export function LineageStrip({ lineage, self }: { lineage: Lineage; self?: { kind: RefKind; id: string } }) {
   return (
     <nav className="hc-lineage" aria-label="Lineage">
@@ -229,7 +240,7 @@ export function LineageStrip({ lineage, self }: { lineage: Lineage; self?: { kin
                 <li key={r.kind + r.id} className={self && self.kind === r.kind && self.id === r.id ? 'is-self' : undefined} title={r.label}>
                   <Link to={refPath(r.kind, r.id)}>
                     <span className="mono">{r.kind === 'version' ? `v${r.id}` : r.id}</span>
-                    {r.label && r.label !== r.id && r.label !== `v${r.id}` && <span className="hc-muted"> {r.label}</span>}
+                    {refLabel(r) && <span className="hc-muted"> {refLabel(r)}</span>}
                   </Link>
                 </li>
               ))}

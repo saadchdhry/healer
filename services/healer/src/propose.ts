@@ -40,9 +40,9 @@ const router = z.object({
     trainAccuracy: z.number(),
     valAccuracy: z.number(),
     lossCurve: z.array(z.number()),
-    trainPositives: z.number().int().optional(),
-    valPositives: z.number().int().optional(),
-    valRecall: z.number().nullable().optional(),
+    trainPositives: z.number().int(),
+    valPositives: z.number().int(),
+    valRecall: z.number().nullable(),
   }),
 }).refine((r) => r.weights.length === r.vocabulary.length, 'A router needs one weight per vocabulary word');
 

@@ -165,7 +165,7 @@ export function ProposalPage() {
   return (
     <Q q={q} what="the proposal">
       {({ proposal: p, base, candidate, gateRun, lineage }) => {
-        const job = jobs.find((j) => j.kind === 'gate' && j.status === 'running' && (j.refId === p.gateRunId || j.label.includes(p.id)));
+        const job = jobs.find((j) => j.kind === 'gate' && j.refId === p.id && (j.status === 'running' || p.status === 'gating'));
         const canGate = p.status === 'draft' || p.status === 'rejected';
         const canApprove = p.status === 'awaiting_approval';
         const canDiscard = p.status !== 'promoted' && p.status !== 'discarded';

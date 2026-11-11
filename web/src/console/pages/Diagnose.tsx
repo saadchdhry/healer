@@ -97,14 +97,16 @@ export function IssuePage() {
   const { id = '' } = useParams();
   const q = useApi('GET /api/healer/issues/:id', [{ params: { id } }], ['issue', 'proposal']);
   const traces = useApi('GET /api/healer/traces', [{ query: { limit: 500 } }], ['trace', 'verdict']);
+  const probeTraces = useApi('GET /api/healer/traces', [{ query: { source: 'redteam', limit: 500 } }], ['trace', 'verdict']);
   const { name } = useCustomers();
-  const { trackJob } = useConsole();
+  const { jobs, trackJob } = useConsole();
   const act = useAction();
+  const proposeJob = jobs.find((j) => j.kind === 'propose' && j.refId === id && j.status !== 'done');
 
   return (
     <Q q={q} what="the issue">
       {({ issue, lineage }) => {
-        const rows = traces.data?.filter((t) => issue.traceIds.includes(t.id)) ?? [];
+        const rows = [...(traces.data ?? []), ...(probeTraces.data ?? [])].filter((t) => issue.traceIds.includes(t.id));
         const closed = issue.status === 'dismissed' || issue.status === 'fixed';
         return (
           <>
@@ -163,6 +165,11 @@ export function IssuePage() {
                     Dismiss
                   </button>
                 </div>
+                {proposeJob && (
+                  <div style={{ marginTop: 10 }}>
+                    <JobProgress job={proposeJob} />
+                  </div>
+                )}
                 <ActionError error={act.error} />
               </div>
             </div>

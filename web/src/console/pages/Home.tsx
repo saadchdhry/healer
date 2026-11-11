@@ -11,7 +11,7 @@ import { ActionError, Failed, Q } from '../components/States.tsx';
 import { IdLink, JobProgress, PageHead, humanize } from '../components/ui.tsx';
 
 export function Home() {
-  const { overview, overviewError, activeStages, refreshOverview } = useConsole();
+  const { overview, activeStages } = useConsole();
   const graphs = useApi('GET /api/healer/graphs', []);
   return (
     <>
@@ -19,7 +19,6 @@ export function Home() {
         A self-improving agent is an agent plus a ratchet: every failure becomes a permanent test, and a change is only kept if it passes every test collected so far.
         Every block below is live and opens its deep dive.
       </PageHead>
-      {overviewError ? <Failed error={overviewError} retry={refreshOverview} /> : null}
       <div className="hc-panel" style={{ padding: 8, marginBottom: 16 }}>
         <ConceptMap overview={overview} active={activeStages} loop={graphs.data?.loop ?? null} />
       </div>
@@ -135,6 +134,10 @@ function TrafficPanel() {
             </button>
           </div>
           {picked && <span className="hc-muted" style={{ fontSize: 12.5 }}>Shows: {picked.teaches}</span>}
+          <span className="hc-muted" style={{ fontSize: 12.5 }}>
+            Each case behaves as described on fresh shop data. Other traffic changes live orders (a refund or a cancellation), so after a while it may play out
+            differently. Reset to factory to get the starting orders back.
+          </span>
           {seeds.error ? <Failed error={seeds.error} retry={seeds.reload} /> : null}
         </div>
         <div className="hc-row">
@@ -144,7 +147,7 @@ function TrafficPanel() {
           </button>
         </div>
         <span className="hc-muted" style={{ fontSize: 12.5 }}>
-          A probe asks the same question two ways and flags answers that disagree.
+          A probe asks the same question two ways in a sandbox and flags answers that disagree. <Link to="/console/findings">See the findings</Link>.
         </span>
       </div>
       <ActionError error={act.error} />
@@ -220,7 +223,7 @@ function ActivityPanel() {
 }
 
 function ResetPanel() {
-  const { refreshOverview } = useConsole();
+  const { resync } = useConsole();
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState(false);
   const act = useAction();
@@ -252,7 +255,7 @@ function ResetPanel() {
                   await call('POST /api/healer/reset');
                   setConfirming(false);
                   setDone(true);
-                  refreshOverview();
+                  resync();
                 })
               }
             >

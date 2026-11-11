@@ -1,8 +1,11 @@
+import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { CaseResult, EvalRun, GateRun } from '@healer/agent';
-import { useApi } from '../../lib/hooks.ts';
+import { call } from '../../lib/api.ts';
+import { useAction, useApi } from '../../lib/hooks.ts';
+import { useConsole } from '../stream.tsx';
 import { dateTime, ms, pct, usd } from '../../lib/format.ts';
-import { Empty, Q } from '../components/States.tsx';
+import { ActionError, Empty, Q } from '../components/States.tsx';
 import { IdLink, Json, Layer, LineageStrip, PageHead, VerdictBadge } from '../components/ui.tsx';
 
 const explainer =
@@ -13,11 +16,51 @@ export function Decision({ g }: { g: GateRun }) {
   return <VerdictBadge state={g.decision === 'accept' ? 'pass' : 'fail'} label={g.decision === 'accept' ? 'Accepted' : 'Rejected'} />;
 }
 
+export function TrialsSetting() {
+  const { overview, refreshOverview } = useConsole();
+  const current = overview?.settings.trialsPerCase;
+  const [value, setValue] = useState('');
+  const act = useAction();
+  useEffect(() => {
+    if (current !== undefined) setValue(String(current));
+  }, [current]);
+  const n = Number(value);
+  const valid = Number.isInteger(n) && n >= 1 && n <= 9;
+  return (
+    <div className="hc-panel">
+      <form
+        className="hc-row"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (valid)
+            void act.run(async () => {
+              await call('PUT /api/healer/settings', { body: { trialsPerCase: n } });
+              refreshOverview();
+            });
+        }}
+      >
+        <label className="hc-row" style={{ fontSize: 13 }}>
+          Trials per eval case
+          <input className="hc-input" type="number" min={1} max={9} value={value} onChange={(e) => setValue(e.target.value)} style={{ width: 64 }} />
+        </label>
+        <button type="submit" className="hc-btn" disabled={act.busy || !valid || n === current}>
+          Save
+        </button>
+        <span className="hc-muted" style={{ fontSize: 12.5, flex: 1, minWidth: 200 }}>
+          More trials separate a real change from run-to-run noise, and each one costs a model call per case.
+        </span>
+      </form>
+      <ActionError error={act.error} />
+    </div>
+  );
+}
+
 export function GatePage() {
   const runs = useApi('GET /api/healer/gate-runs', [], ['gateRun']);
   return (
     <>
       <PageHead title="Gate">{explainer}</PageHead>
+      <TrialsSetting />
       <Layer title="Gate runs">
         <Q q={runs} what="gate runs">
           {(list) =>

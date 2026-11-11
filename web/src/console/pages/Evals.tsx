@@ -9,7 +9,7 @@ import { useConsole } from '../stream.tsx';
 import { ActionError, Empty, Q } from '../components/States.tsx';
 import { useCustomers } from '../components/TraceTable.tsx';
 import { IdLink, JobProgress, Json, Layer, LineageStrip, PageHead, Tag, VerdictBadge, checkKindWord } from '../components/ui.tsx';
-import { CaseComparison } from './Gate.tsx';
+import { CaseComparison, TrialsSetting } from './Gate.tsx';
 
 const explainer =
   'The eval suite is the definition of good. Each case is a realistic input, usually taken from a real failure, plus checks on the final answer, the end state of the shop data, or the sequence of tool calls. Every failure that gets fixed becomes a permanent case, so the suite only grows, and it runs in a sandbox that never touches the live shop.';
@@ -75,6 +75,7 @@ export function EvalsPage() {
   return (
     <>
       <PageHead title="Eval suite">{explainer}</PageHead>
+      <TrialsSetting />
       <Layer
         title="Cases and pass history"
         aside={
@@ -128,24 +129,21 @@ export function EvalsPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {list
-                    .slice()
-                    .reverse()
-                    .map((r) => (
-                      <tr key={r.id}>
-                        <td>
-                          <IdLink kind="evalRun" id={r.id} />
-                        </td>
-                        <td>
-                          <IdLink kind="version" id={r.versionId} />
-                        </td>
-                        <td>{r.status === 'running' ? <VerdictBadge state="pending" label="Running" /> : r.status === 'failed' ? <VerdictBadge state="fail" label="Failed to run" /> : 'Done'}</td>
-                        <td className="num">{r.results.length}</td>
-                        <td className="num mono">{pct(r.passRate)}</td>
-                        <td className="num mono">{usd(r.costPerTaskUsd)}</td>
-                        <td className="hc-muted">{dateTime(r.startedAt)}</td>
-                      </tr>
-                    ))}
+                  {list.map((r) => (
+                    <tr key={r.id}>
+                      <td>
+                        <IdLink kind="evalRun" id={r.id} />
+                      </td>
+                      <td>
+                        <IdLink kind="version" id={r.versionId} />
+                      </td>
+                      <td>{r.status === 'running' ? <VerdictBadge state="pending" label="Running" /> : r.status === 'failed' ? <VerdictBadge state="fail" label="Failed to run" /> : 'Done'}</td>
+                      <td className="num">{r.results.length}</td>
+                      <td className="num mono">{pct(r.passRate)}</td>
+                      <td className="num mono">{usd(r.costPerTaskUsd)}</td>
+                      <td className="hc-muted">{dateTime(r.startedAt)}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             ) : (
@@ -389,7 +387,8 @@ export function EvalCasePage() {
                     disabled={act.busy || !title.trim()}
                     onClick={() =>
                       act.run(async () => {
-                        await call('PATCH /api/healer/evals/:id', { params: { id: c.id }, body: { title: title.trim(), checks } });
+                        const checksChanged = JSON.stringify(checks) !== JSON.stringify(c.checks);
+                        await call('PATCH /api/healer/evals/:id', { params: { id: c.id }, body: { title: title.trim(), ...(checksChanged ? { checks } : {}) } });
                         setEditing(false);
                         q.reload();
                       })

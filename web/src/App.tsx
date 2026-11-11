@@ -4,7 +4,7 @@ import { ConsoleLayout } from './console/ConsoleLayout.tsx';
 import { Home } from './console/pages/Home.tsx';
 import { RunPage } from './console/pages/Run.tsx';
 import { TracesPage, TraceDetailPage } from './console/pages/Traces.tsx';
-import { JudgePage } from './console/pages/Judge.tsx';
+import { FindingPage, FindingsPage, JudgePage, VerdictPage } from './console/pages/Judge.tsx';
 import { DiagnosePage, IssuePage } from './console/pages/Diagnose.tsx';
 import { ProposePage, ProposalPage } from './console/pages/Propose.tsx';
 import { GatePage, GateRunPage } from './console/pages/Gate.tsx';
@@ -26,6 +26,9 @@ export function App() {
           <Route path="traces" element={<TracesPage />} />
           <Route path="traces/:id" element={<TraceDetailPage />} />
           <Route path="judge" element={<JudgePage />} />
+          <Route path="verdicts/:id" element={<VerdictPage />} />
+          <Route path="findings" element={<FindingsPage />} />
+          <Route path="findings/:id" element={<FindingPage />} />
           <Route path="diagnose" element={<DiagnosePage />} />
           <Route path="issues/:id" element={<IssuePage />} />
           <Route path="propose" element={<ProposePage />} />

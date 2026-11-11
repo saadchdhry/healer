@@ -185,7 +185,13 @@ const handlers: Handlers = {
   'GET /api/healer/traces': ({ query }) =>
     fx
       .traceSummaries()
-      .filter((t) => (!query.source || t.source === query.source) && (!query.verdict || t.verdict === query.verdict) && (!query.versionId || t.versionId === Number(query.versionId)))
+      .filter(
+        (t) =>
+          (query.source ? t.source === query.source : !['eval', 'replay', 'redteam'].includes(t.source)) &&
+          (!query.verdict || t.verdict === query.verdict) &&
+          (!query.versionId || t.versionId === Number(query.versionId)) &&
+          (!query.customerId || t.customerId === query.customerId),
+      )
       .slice(0, Number(query.limit ?? 200)),
   'GET /api/healer/traces/:id': ({ params }) => {
     const trace = fx.traces.find((t) => t.id === params.id) ?? fx.syntheticTrace(params.id!);
@@ -195,6 +201,10 @@ const handlers: Handlers = {
 
   'GET /api/healer/rules': () => fx.rules,
   'GET /api/healer/verdicts': ({ query }) => fx.verdicts.filter((v) => query.passed === undefined || String(v.passed) === query.passed).slice().reverse(),
+  'GET /api/healer/verdicts/:id': ({ params }) => {
+    const verdict = fx.verdicts.find((v) => v.id === params.id);
+    return verdict ? { verdict, lineage: fx.lineageFor('verdict', verdict.id) } : notFound();
+  },
   'POST /api/healer/traces/:id/judge': async ({ params }) => {
     await sleep(1500);
     const v = fx.verdicts.find((x) => x.traceId === params.id);
@@ -353,7 +363,7 @@ const handlers: Handlers = {
     return c;
   },
   'POST /api/healer/evals/run': ({ body }) => startJob('eval', `Run the eval suite on version ${body.versionId}`, 9, 'gate', ['evalRun']),
-  'GET /api/healer/eval-runs': () => fx.evalRuns,
+  'GET /api/healer/eval-runs': () => fx.evalRuns.slice().reverse(),
   'GET /api/healer/eval-runs/:id': ({ params }) => fx.evalRuns.find((r) => r.id === params.id) ?? notFound(),
 
   'GET /api/healer/seeds': () => fx.seeds,

@@ -90,7 +90,7 @@ export function createShopApp(options: ShopOptions) {
 
   app.get('/api/shop/customers/:id/orders', (c) => {
     const env = new Environment(store.env()!);
-    if (!env.customer(c.req.param('id'))) return c.json({ error: 'unknown_customer' }, 404);
+    if (!env.customer(c.req.param('id'))) return c.json({ error: 'unknown_customer', message: `No customer with id ${c.req.param('id')}` }, 404);
     return c.json<Res<'GET /api/shop/customers/:id/orders'>>(env.ordersFor(c.req.param('id')));
   });
 
@@ -107,11 +107,11 @@ export function createShopApp(options: ShopOptions) {
     if (body.source !== undefined && !SOURCES.includes(body.source as TraceSource)) return c.json({ error: 'bad_request', message: 'unknown source' }, 400);
     const { customerId, message } = body;
     const source = (body.source as TraceSource | undefined) ?? 'shop';
-    if (!store.env()!.customers.some((cu) => cu.id === customerId)) return c.json({ error: 'unknown_customer' }, 404);
+    if (!store.env()!.customers.some((cu) => cu.id === customerId)) return c.json({ error: 'unknown_customer', message: `No customer with id ${customerId}` }, 404);
     const existing = typeof body.threadId === 'string' ? store.thread(body.threadId) : null;
-    if (body.threadId !== undefined && (!existing || existing.customerId !== customerId)) return c.json({ error: 'unknown_thread' }, 404);
+    if (body.threadId !== undefined && (!existing || existing.customerId !== customerId)) return c.json({ error: 'unknown_thread', message: 'That conversation does not exist for this customer' }, 404);
     const llm = options.getLlm();
-    if (!llm) return c.json({ error: 'missing_api_key' }, 503);
+    if (!llm) return c.json({ error: 'missing_api_key', message: 'No ANTHROPIC_API_KEY is set, so the support agent cannot reply' }, 503);
 
     return serialised(async () => {
       const thread: StoredThread = existing ? store.thread(existing.id)! : { id: `th_${crypto.randomUUID()}`, customerId, turns: [] };
@@ -150,7 +150,7 @@ export function createShopApp(options: ShopOptions) {
     if (!isObject(body) || typeof body.traceId !== 'string' || !RATINGS.includes(body.rating as Rating)) {
       return c.json({ error: 'bad_request', message: 'traceId and rating (up or down) are required' }, 400);
     }
-    if (!store.trace(body.traceId)) return c.json({ error: 'unknown_trace' }, 404);
+    if (!store.trace(body.traceId)) return c.json({ error: 'unknown_trace', message: 'That reply is no longer on record' }, 404);
     store.setRating(body.traceId, body.rating as Rating);
     emit({ type: 'feedback', traceId: body.traceId, rating: body.rating as Rating });
     return c.json<Res<'POST /api/shop/feedback'>>({ ok: true });

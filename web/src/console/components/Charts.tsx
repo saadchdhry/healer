@@ -20,7 +20,7 @@ export function PassRateChart({ versions, runs }: { versions: AgentVersion[]; ru
   const navigate = useNavigate();
   const [tip, setTip] = useState<Tip>(null);
   const points = versions
-    .map((v) => ({ v, run: runs.filter((r) => r.versionId === v.id && r.status === 'done').at(-1) }))
+    .map((v) => ({ v, run: runs.filter((r) => r.versionId === v.id && r.status === 'done').sort((a, b) => a.startedAt.localeCompare(b.startedAt)).at(-1) }))
     .filter((p): p is { v: AgentVersion; run: EvalRun } => p.run !== undefined);
   if (!points.length) return <p className="hc-muted">No eval runs have finished yet. Run the suite on a version from the eval suite page and its pass rate appears here.</p>;
   const W = 380;

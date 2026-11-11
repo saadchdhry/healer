@@ -160,8 +160,8 @@ function lossCurve(start: number, end: number, n: number, noise: number): number
 }
 
 routerModels.push(
-  { id: 'rtr_01', createdAt: at('11-11', '11:02'), vocabulary: vocab.slice(0, 12), weights: weights.slice(0, 12), bias: -0.4, threshold: 0.5, metrics: { trainSize: 14, valSize: 4, trainAccuracy: 0.86, valAccuracy: 0.5, lossCurve: lossCurve(0.69, 0.41, 30, 0.03) } },
-  { id: 'rtr_02', createdAt: at('11-11', '11:48'), vocabulary: vocab, weights, bias: -0.62, threshold: 0.5, metrics: { trainSize: 28, valSize: 8, trainAccuracy: 0.93, valAccuracy: 0.875, lossCurve: lossCurve(0.69, 0.22, 60, 0.04) } },
+  { id: 'rtr_01', createdAt: at('11-11', '11:02'), vocabulary: vocab.slice(0, 12), weights: weights.slice(0, 12), bias: -0.4, threshold: 0.5, metrics: { trainSize: 14, valSize: 4, trainAccuracy: 0.86, valAccuracy: 0.5, lossCurve: lossCurve(0.69, 0.41, 30, 0.03), trainPositives: 4, valPositives: 0, valRecall: null } },
+  { id: 'rtr_02', createdAt: at('11-11', '11:48'), vocabulary: vocab, weights, bias: -0.62, threshold: 0.5, metrics: { trainSize: 28, valSize: 8, trainAccuracy: 0.93, valAccuracy: 0.875, lossCurve: lossCurve(0.69, 0.22, 60, 0.04), trainPositives: 9, valPositives: 3, valRecall: 0.667 } },
 );
 
 versions.push({

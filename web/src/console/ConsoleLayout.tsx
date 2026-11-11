@@ -104,10 +104,17 @@ function Rail() {
       <div className="hc-status">
         <div>
           <span>
-            <span className={`hc-dot ${overviewError ? 'bad' : overview?.shopConnected ? 'ok' : overview ? 'bad' : ''}`} />
+            <span className={`hc-dot ${overviewError ? 'bad' : overview ? 'ok' : ''}`} />
+            Healer
+          </span>
+          <b>{overviewError ? 'not reachable' : overview ? 'running' : 'checking'}</b>
+        </div>
+        <div>
+          <span>
+            <span className={`hc-dot ${overviewError ? '' : overview?.shopConnected ? 'ok' : overview ? 'bad' : ''}`} />
             Shop
           </span>
-          <b>{overviewError ? 'healer down' : !overview ? 'checking' : overview.shopConnected ? 'connected' : 'not reachable'}</b>
+          <b>{overviewError ? 'unknown' : !overview ? 'checking' : overview.shopConnected ? 'connected' : 'not reachable'}</b>
         </div>
         <div>
           <span>
@@ -147,7 +154,17 @@ function Rail() {
 }
 
 function KeyBanner() {
-  const { overview } = useConsole();
+  const { overview, overviewError } = useConsole();
+  if (overviewError)
+    return (
+      <div className="hc-banner" role="status">
+        <strong>The healer is not running.</strong>
+        <span>
+          The console cannot show or change anything until it is back, and what it shows below may be out of date. The shop keeps serving customers in the
+          meantime, and the healer catches up on their conversations when it restarts. Trying again every few seconds.
+        </span>
+      </div>
+    );
   if (!overview || overview.apiKeyPresent) return null;
   return (
     <div className="hc-banner" role="status">
