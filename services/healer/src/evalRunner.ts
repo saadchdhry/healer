@@ -42,7 +42,7 @@ function summarise(run: EvalRun): void {
   run.costPerTaskUsd = trials.length ? run.totalCostUsd / trials.length : 0;
 }
 
-async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
+export async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
   let next = 0;
   const worker = async () => {
     while (next < items.length) await fn(items[next++]!);
@@ -50,13 +50,17 @@ async function pool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
-// A completed run of this version that already covers every enabled case at the current trial count.
-export function reusableRun(h: Healer, versionId: number): { prior: EvalRun | null; missing: EvalCase[] } {
+// The latest completed run of this version at the current trial count, the results in it that still count
+// (the case is enabled and its checks were not edited after the run started), and the enabled cases they miss.
+export function reusableRun(h: Healer, versionId: number): { prior: EvalRun | null; kept: CaseResult[]; missing: EvalCase[] } {
   const trials = h.store.settings().trialsPerCase;
   const enabled = h.store.evalCases.list().filter((c) => c.enabled);
+  const edited = h.store.checksEditedAt();
   const prior = h.store.evalRuns.list().filter((r) => r.versionId === versionId && r.status === 'done' && r.trialsPerCase === trials).at(-1) ?? null;
-  const covered = new Set(prior?.results.map((r) => r.caseId));
-  return { prior, missing: enabled.filter((c) => !covered.has(c.id)) };
+  const enabledIds = new Set(enabled.map((c) => c.id));
+  const kept = prior ? prior.results.filter((r) => enabledIds.has(r.caseId) && (edited[r.caseId] ?? '') < prior.startedAt) : [];
+  const covered = new Set(kept.map((r) => r.caseId));
+  return { prior, kept, missing: enabled.filter((c) => !covered.has(c.id)) };
 }
 
 // Runs the suite over a version. Reuses a run that already covers every enabled case, otherwise runs only the
@@ -71,7 +75,7 @@ export async function runSuite(
   const epoch = h.epoch;
   const version = store.versions.get(versionId);
   if (!version) throw new Error(`Unknown version ${versionId}`);
-  const { prior, missing } = reusableRun(h, versionId);
+  const { prior, kept, missing } = reusableRun(h, versionId);
   if (prior && !missing.length) {
     onRun?.(prior);
     return prior;
@@ -86,7 +90,7 @@ export async function runSuite(
     startedAt: now(),
     endedAt: null,
     trialsPerCase,
-    results: prior?.results.filter((r) => enabledIds.includes(r.caseId)) ?? [],
+    results: kept,
     passRate: 0,
     costPerTaskUsd: 0,
     totalCostUsd: 0,

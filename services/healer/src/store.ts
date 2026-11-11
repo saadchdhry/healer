@@ -23,6 +23,10 @@ import type {
 
 export const DEFAULT_SETTINGS: Settings = { autonomy: 'approve', trialsPerCase: 3 };
 
+// Traces the healer ran itself, in a sandbox, rather than conversations that reached the shop.
+export const SANDBOX_SOURCES: TraceSource[] = ['eval', 'replay', 'redteam'];
+const SANDBOX_SQL = SANDBOX_SOURCES.map((s) => `'${s}'`).join(', ');
+
 // A JSON document collection kept in insertion order. Ids are strings; versions use their number as text.
 export class Collection<T> {
   constructor(
@@ -147,7 +151,16 @@ export class HealerStore {
     this.setKv('cursor', seq);
   }
 
-  // Router training state. Written by the router stage (not built yet), read by GET /model and the overview.
+  // When each eval case last had its checks edited. Suite results older than this are not reused for that case.
+  checksEditedAt(): Record<string, string> {
+    return this.getKv<Record<string, string>>('checksEditedAt') ?? {};
+  }
+
+  markChecksEdited(caseId: string, at: string): void {
+    this.setKv('checksEditedAt', { ...this.checksEditedAt(), [caseId]: at });
+  }
+
+  // Router training state: every trained router is kept as a weights version, oldest first.
   routers(): RouterModel[] {
     return this.getKv<RouterModel[]>('routers') ?? [];
   }
@@ -243,7 +256,7 @@ export class HealerStore {
   }
 
   traceCount(): number {
-    return (this.db.prepare("SELECT COUNT(*) AS n FROM traces WHERE source != 'eval'").get() as { n: number }).n;
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM traces WHERE source NOT IN (${SANDBOX_SQL})`).get() as { n: number }).n;
   }
 
   // ── Verdicts and ratings ──
@@ -273,7 +286,10 @@ export class HealerStore {
   }
 
   verdictCounts(): { passed: number; failed: number } {
-    const row = this.db.prepare('SELECT COALESCE(SUM(passed), 0) AS p, COUNT(*) AS n FROM verdicts').get() as { p: number; n: number };
+    // Router replays are judged only to label training data, so they are not counted as verdicts on traffic.
+    const row = this.db
+      .prepare("SELECT COALESCE(SUM(v.passed), 0) AS p, COUNT(*) AS n FROM verdicts v JOIN traces t ON t.id = v.trace_id WHERE t.source != 'replay'")
+      .get() as { p: number; n: number };
     return { passed: row.p, failed: row.n - row.p };
   }
 

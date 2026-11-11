@@ -63,8 +63,9 @@ export function runErrorCheck(trace: Trace): CheckResult {
 const preferenceTitle = (note: string) => `Remember for this customer: ${note}`;
 
 // The judge entry point: policy rules in code, one model call for what code cannot check, and any customer
-// preferences turned into issues so user-level memory flows through the same pipeline.
-export async function judgeTrace(h: Healer, trace: Trace): Promise<{ verdict: Verdict; preferenceIssues: Issue[] }> {
+// preferences turned into issues so user-level memory flows through the same pipeline. A sandbox replay is
+// judged the same way, but files no preferences and logs no activity: it is a measurement, not a conversation.
+export async function judgeTrace(h: Healer, trace: Trace, { sandbox = false } = {}): Promise<{ verdict: Verdict; preferenceIssues: Issue[] }> {
   const { store } = h;
   const checks: CheckResult[] = policyChecks(trace);
   let judgeRun: Run | null = null;
@@ -101,7 +102,7 @@ export async function judgeTrace(h: Healer, trace: Trace): Promise<{ verdict: Ve
     if (out.customer_notes.applicable) {
       checks.push({ checkId: 'judge:customer_notes', kind: 'rubric', label: 'The reply honours the notes about this customer', passed: out.customer_notes.passed, detail: out.customer_notes.detail });
     }
-    for (const pref of out.preferences) {
+    for (const pref of sandbox ? [] : out.preferences) {
       const title = preferenceTitle(pref.note);
       if (captured.includes(title)) continue;
       const issue: Issue = {
@@ -139,7 +140,7 @@ export async function judgeTrace(h: Healer, trace: Trace): Promise<{ verdict: Ve
   const verdict: Verdict = { id: newId('vd'), traceId: trace.id, createdAt: now(), passed: checks.every((c) => c.passed), checks, judgeRun };
   store.saveVerdict(verdict);
   const failed = checks.filter((c) => !c.passed).map((c) => c.label);
-  h.activity(
+  if (!sandbox) h.activity(
     'judge',
     verdict.passed ? `Passed: "${trace.input.slice(0, 60)}"` : `Failed (${failed.join('; ')}): "${trace.input.slice(0, 60)}"`,
     { kind: 'verdict', id: verdict.id, label: verdict.passed ? 'pass' : 'fail' },

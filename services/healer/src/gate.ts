@@ -20,8 +20,15 @@ function failingDetail(result: CaseResult | undefined): string {
 }
 
 // Accept only if no case regressed, the pass rate did not drop, and (for a proposal fixing an issue)
-// at least one of that issue's eval cases passes on the candidate.
-export function decide(base: EvalRun, candidate: EvalRun, issueCaseIds: string[] | null, title: (caseId: string) => string): GateDecision {
+// at least one of that issue's eval cases passes on the candidate. A change made only to save money
+// (`costFirst`) is judged the same way, but its reasons lead with what it does to cost per task.
+export function decide(
+  base: EvalRun,
+  candidate: EvalRun,
+  issueCaseIds: string[] | null,
+  title: (caseId: string) => string,
+  { costFirst = false } = {},
+): GateDecision {
   const baseBy = new Map(base.results.map((r) => [r.caseId, r]));
   const common = candidate.results.filter((r) => baseBy.has(r.caseId));
   const basePassed = common.filter((r) => baseBy.get(r.caseId)!.passed).length;
@@ -40,14 +47,26 @@ export function decide(base: EvalRun, candidate: EvalRun, issueCaseIds: string[]
   if (issueCases.length && !issueFixed.length) failures.push("none of the issue's own eval cases passes");
 
   const n = common.length;
+  const costChange = base.costPerTaskUsd ? ` (${candidate.costPerTaskUsd >= base.costPerTaskUsd ? '+' : ''}${pct(candidate.costPerTaskUsd / base.costPerTaskUsd - 1)})` : '';
+  const costs = `${money(base.costPerTaskUsd)} on version ${base.versionId} to ${money(candidate.costPerTaskUsd)} on version ${candidate.versionId}${costChange}`;
+  if (costFirst) {
+    reasons.push(
+      failures.length
+        ? `Rejected: cost per task would go from ${costs}, but ${failures.join(', and ')}.`
+        : `Accepted: cost per task goes from ${costs}, no case regressed and the pass rate did not drop.`,
+    );
+  } else {
+    reasons.push(
+      failures.length
+        ? `Rejected: ${failures.join(', and ')}.`
+        : `Accepted: no case regressed, the pass rate did not drop${issueCases.length ? ", and the issue's eval case now passes" : ''}.`,
+    );
+  }
+  const points = n ? Math.round(((candPassed - basePassed) / n) * 100) : 0;
   reasons.push(
-    failures.length
-      ? `Rejected: ${failures.join(', and ')}.`
-      : `Accepted: no case regressed, the pass rate did not drop${issueCases.length ? ", and the issue's eval case now passes" : ''}.`,
+    `Pass rate: ${pct(n ? basePassed / n : 0)} (${basePassed} of ${n} cases) on version ${base.versionId}, ${pct(n ? candPassed / n : 0)} (${candPassed} of ${n}) on version ${candidate.versionId} (${points ? `${points > 0 ? '+' : ''}${points} points` : 'no change'}).`,
   );
-  reasons.push(
-    `Pass rate: ${pct(n ? basePassed / n : 0)} (${basePassed} of ${n} cases) on version ${base.versionId}, ${pct(n ? candPassed / n : 0)} (${candPassed} of ${n}) on version ${candidate.versionId}.`,
-  );
+  if (!costFirst) reasons.push(`Cost per task: ${money(base.costPerTaskUsd)} on version ${base.versionId}, ${money(candidate.costPerTaskUsd)} on version ${candidate.versionId}${costChange}.`);
   for (const r of regressed) {
     reasons.push(`Regressed: "${title(r.caseId)}" passed on version ${base.versionId} and fails on version ${candidate.versionId} (${trials(r)}).${failingDetail(r)}`);
   }
@@ -55,8 +74,6 @@ export function decide(base: EvalRun, candidate: EvalRun, issueCaseIds: string[]
   if (issueCases.length && !issueFixed.length) {
     for (const r of issueCases) reasons.push(`Still failing: "${title(r.caseId)}" from this issue (${trials(r)}).${failingDetail(r)}`);
   }
-  const change = base.costPerTaskUsd ? ` (${candidate.costPerTaskUsd >= base.costPerTaskUsd ? '+' : ''}${pct(candidate.costPerTaskUsd / base.costPerTaskUsd - 1)})` : '';
-  reasons.push(`Cost per task: ${money(base.costPerTaskUsd)} on version ${base.versionId}, ${money(candidate.costPerTaskUsd)} on version ${candidate.versionId}${change}.`);
 
   return { decision: failures.length ? 'reject' : 'accept', fixedCaseIds: fixed.map((r) => r.caseId), regressedCaseIds: regressed.map((r) => r.caseId), reasons };
 }
@@ -99,7 +116,8 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
 
   const issue = proposal.issueId ? store.issues.get(proposal.issueId) : null;
   const issueCaseIds = issue ? issue.evalCaseIds.filter((id) => store.evalCases.get(id)?.enabled) : null;
-  const result = decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id);
+  const costFirst = !issue && proposal.changes.every((c) => c.surface === 'model');
+  const result = decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id, { costFirst });
   Object.assign(gateRun, result);
   store.gateRuns.put(gateRun);
 

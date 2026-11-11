@@ -154,7 +154,7 @@ test('end to end: a late refund is judged, diagnosed, fixed, gated, approved and
   const graphs = (await h.call<{ loop: GraphShape; agent: GraphShape }>('GET', '/api/healer/graphs')).body;
   assert.deepEqual(graphs.loop.nodes.map((n) => n.id), ['judge', 'diagnose', 'propose', 'gate', 'promote']);
   assert.equal(graphs.agent.entry, 'route');
-  assert.equal((await h.call('POST', '/api/healer/simulate', { count: 2 })).status, 501);
+  assert.equal((await h.call('POST', '/api/healer/simulate', { count: 0 })).status, 400);
   assert.equal((await h.call<{ error: string }>('GET', '/api/healer/nope')).body.error, 'not_found');
 
   // Reset to factory: golden cases and version 0 only.

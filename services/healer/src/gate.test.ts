@@ -49,3 +49,15 @@ test("rejects when none of the issue's cases passes", () => {
   assert.match(d.reasons[0]!, /none of the issue's own eval cases passes/);
   assert.ok(d.reasons.some((r) => r.startsWith('Still failing: "case new"')));
 });
+
+test('a change made only to save money leads with cost per task', () => {
+  const accept = decide(run(0, [['a', true], ['b', false]], 0.002), run(5, [['a', true], ['b', false]], 0.0008), null, title, { costFirst: true });
+  assert.equal(accept.decision, 'accept');
+  assert.equal(accept.reasons[0], 'Accepted: cost per task goes from $0.0020 on version 0 to $0.0008 on version 5 (-60%), no case regressed and the pass rate did not drop.');
+  assert.equal(accept.reasons[1], 'Pass rate: 50% (1 of 2 cases) on version 0, 50% (1 of 2) on version 5 (no change).');
+  assert.ok(!accept.reasons.some((r) => r.startsWith('Cost per task')), 'cost is not repeated');
+
+  const reject = decide(run(0, [['a', true], ['b', true]], 0.002), run(6, [['a', true], ['b', false]], 0.0008), null, title, { costFirst: true });
+  assert.match(reject.reasons[0]!, /^Rejected: cost per task would go from \$0\.0020 on version 0 to \$0\.0008 on version 6 \(-60%\), but 1 case that passed before now fails, and the pass rate dropped\.$/);
+  assert.match(reject.reasons[1]!, /\(-50 points\)\.$/);
+});

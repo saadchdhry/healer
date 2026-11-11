@@ -25,8 +25,12 @@ import { loopGraphShape, runLoop } from './loop.ts';
 import { POLICY_RULES } from './policy.ts';
 import { approve, rollback, setTier } from './promote.ts';
 import { ChangeError, changeSchema, createProposal, isOpenProposal, startProposeJob } from './propose.ts';
+import { startRedTeamJob } from './redteam.ts';
+import { proposeRouter, startDatasetJob, trainAndStore } from './routerTraining.ts';
+import { SEEDED_CASES, startFireJob } from './seeds.ts';
 import { followShop, handleShopEvent, type ShopClient } from './shopLink.ts';
-import { HealerStore } from './store.ts';
+import { startSimulateJob } from './simulate.ts';
+import { HealerStore, SANDBOX_SOURCES } from './store.ts';
 import { registerStubs } from './stubs.ts';
 
 type Res<K extends keyof HealerApi> = HealerApi[K]['res'];
@@ -215,7 +219,7 @@ export function createHealerApp(options: HealerOptions) {
       }),
     );
     let list: TraceSummary[] = store.traceSummaries({ source: q.source, versionId: q.versionId, customerId: q.customerId });
-    if (!q.source) list = list.filter((t) => t.source !== 'eval');
+    if (!q.source) list = list.filter((t) => !SANDBOX_SOURCES.includes(t.source));
     if (q.verdict) list = list.filter((t) => t.verdict === q.verdict);
     return c.json<Res<'GET /api/healer/traces'>>(list.slice(0, q.limit ?? 200));
   });
@@ -398,6 +402,30 @@ export function createHealerApp(options: HealerOptions) {
     return c.json<Res<'POST /api/healer/model/tier'>>(await h.stage('promote', 'Switch model tier', () => shopCall(() => setTier(h, tier))));
   });
 
+  app.post('/api/healer/model/router/dataset', async (c) => {
+    const { maxExamples } = await body(c, z.object({ maxExamples: z.number().int().min(1).max(200) }));
+    requireKey();
+    requireLive();
+    return c.json<Res<'POST /api/healer/model/router/dataset'>>(startDatasetJob(h, maxExamples));
+  });
+
+  app.post('/api/healer/model/router/train', async (c) => {
+    const dataset = store.routerDataset();
+    if (!dataset.some((e) => e.needsStrong)) {
+      throw conflict(
+        `The dataset has no requests that needed the stronger model yet: none of its ${dataset.length} examples failed on haiku and passed on the stronger tier. Send harder traffic, such as the multi-rule seeded cases or more simulated customers, then build the dataset again.`,
+      );
+    }
+    return c.json<Res<'POST /api/healer/model/router/train'>>(await trainAndStore(h));
+  });
+
+  app.post('/api/healer/model/router/:id/propose', (c) => {
+    const router = store.routers().find((r) => r.id === c.req.param('id'));
+    if (!router) throw notFound('Router');
+    requireLive();
+    return c.json<Res<'POST /api/healer/model/router/:id/propose'>>(proposeRouter(h, router));
+  });
+
   // ── Eval suite ──
 
   app.get('/api/healer/evals', (c) => c.json<Res<'GET /api/healer/evals'>>(store.evalCases.list().map(evalView)));
@@ -443,6 +471,7 @@ export function createHealerApp(options: HealerOptions) {
     if (!evalCase) throw notFound('Eval case');
     const patch = await body(c, z.object({ title: z.string().min(1).optional(), checks: checksSchema.optional(), enabled: z.boolean().optional() }));
     const updated = store.evalCases.put({ ...evalCase, ...(patch as Partial<EvalCase>) });
+    if (patch.checks) store.markChecksEdited(evalCase.id, now());
     h.changed('evalCase');
     return c.json<Res<'PATCH /api/healer/evals/:id'>>(updated);
   });
@@ -462,6 +491,32 @@ export function createHealerApp(options: HealerOptions) {
     return c.json<Res<'GET /api/healer/eval-runs/:id'>>(run);
   });
 
+  // ── Traffic ──
+
+  app.get('/api/healer/seeds', (c) => c.json<Res<'GET /api/healer/seeds'>>(SEEDED_CASES));
+
+  app.post('/api/healer/seeds/:id/fire', (c) => {
+    const seed = SEEDED_CASES.find((s) => s.id === c.req.param('id'));
+    if (!seed) throw notFound('Seeded case');
+    requireKey();
+    return c.json<Res<'POST /api/healer/seeds/:id/fire'>>(startFireJob(h, seed));
+  });
+
+  app.post('/api/healer/simulate', async (c) => {
+    const { count } = await body(c, z.object({ count: z.number().int().min(1).max(100) }));
+    requireKey();
+    return c.json<Res<'POST /api/healer/simulate'>>(startSimulateJob(h, count));
+  });
+
+  app.post('/api/healer/redteam', async (c) => {
+    const { count } = await body(c, z.object({ count: z.number().int().min(1).max(20) }));
+    requireKey();
+    requireLive();
+    return c.json<Res<'POST /api/healer/redteam'>>(startRedTeamJob(h, count));
+  });
+
+  app.get('/api/healer/findings', (c) => c.json<Res<'GET /api/healer/findings'>>(store.findings.list().reverse()));
+
   registerStubs(app);
 
   return {
@@ -477,7 +532,7 @@ export function createHealerApp(options: HealerOptions) {
       for (const p of store.proposals.list()) if (p.status === 'gating') store.proposals.put({ ...p, status: 'draft' });
       seed();
       // Traces ingested but not yet judged when the healer last stopped.
-      for (const t of store.traceSummaries().reverse()) if (t.source !== 'eval' && t.verdict === 'pending') void runLoop(h, t.id);
+      for (const t of store.traceSummaries().reverse()) if (!SANDBOX_SOURCES.includes(t.source) && t.verdict === 'pending') void runLoop(h, t.id);
       follower.start();
     },
     close: () => {

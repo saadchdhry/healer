@@ -2,7 +2,8 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { NOTABLE_ORDERS as O, ScriptedLlm, type EvalCheckSpec, type ToolCallRecord } from '@healer/agent';
 import { checkSpecSchema, endStateCheck, evaluateChecks, exactMatchCheck, invariantCheck, toolSequenceCheck } from './evals.ts';
-import { makeTrace, setupHealer } from './testing.ts';
+import { runSuite } from './evalRunner.ts';
+import { makeTrace, setupHealer, waitFor } from './testing.ts';
 
 const spec = (kind: EvalCheckSpec['kind'], params: Record<string, unknown>): EvalCheckSpec => ({ id: 'c', kind, label: 'check', params });
 const call = (name: ToolCallRecord['name'], input: Record<string, unknown> = {}): ToolCallRecord => ({ runId: 'r', name, input, output: {}, blockedByGuard: null });
@@ -78,4 +79,28 @@ test('check specs are validated per kind', () => {
   assert.equal(checkSpecSchema.safeParse({ id: 'a', kind: 'tool_sequence', label: 'l', params: { mustCall: ['fly'] } }).success, false);
   assert.equal(checkSpecSchema.safeParse({ id: 'a', kind: 'rubric', label: 'l', params: {} }).success, false);
   assert.equal(checkSpecSchema.safeParse({ id: 'a', kind: 'consistency', label: 'l', params: {} }).success, false);
+});
+
+test('editing a case\'s checks drops its cached results; editing the title does not', async () => {
+  const llm = new ScriptedLlm().push({ text: 'Cancelled.' }, { text: 'Cancelled.' });
+  const h = setupHealer(llm);
+  h.start();
+  await waitFor(() => h.healer.shopConnected && h.store.versions.count() === 1);
+  await h.call('PUT', '/api/healer/settings', { trialsPerCase: 1 });
+  for (const c of h.store.evalCases.list()) if (c.id !== 'golden_cancel') await h.call('PATCH', `/api/healer/evals/${c.id}`, { enabled: false });
+
+  const first = await runSuite(h.healer, 0);
+  assert.equal(llm.requests.length, 1);
+  assert.equal((await runSuite(h.healer, 0)).id, first.id, 'nothing changed, so the run is reused');
+  await h.call('PATCH', '/api/healer/evals/golden_cancel', { title: 'Cancel a processing order' });
+  assert.equal((await runSuite(h.healer, 0)).id, first.id, 'a new title is not a new test');
+
+  const checks = [{ id: 'cancelled', kind: 'end_state', label: 'PM-1020 is still processing', params: { orderId: 'PM-1020', status: 'processing' } }];
+  assert.equal((await h.call('PATCH', '/api/healer/evals/golden_cancel', { checks })).status, 200);
+  const second = await runSuite(h.healer, 0);
+  assert.notEqual(second.id, first.id);
+  assert.equal(llm.requests.length, 2, 'the edited case ran again');
+  assert.deepEqual(second.results.map((r) => [r.caseId, r.passed]), [['golden_cancel', true]]);
+  assert.equal((await runSuite(h.healer, 0)).id, second.id, 'the fresh result is reused from then on');
+  h.close();
 });

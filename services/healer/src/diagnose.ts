@@ -44,16 +44,17 @@ export const diagnoseSchema = z.object({
   eval_case: z.object({ title: z.string(), checks: z.array(modelCheck) }),
 });
 
-// Failed verdicts whose trace is in no issue yet. Runs that crashed are plumbing, not agent behaviour, so they are left out.
+// Failed verdicts whose trace is in no issue yet. Runs that crashed are plumbing, not agent behaviour, so they are left out,
+// and so are router replays: they measure a tier, they are not failures anyone met.
 export function undiagnosed(h: Healer): Verdict[] {
   const filed = new Set(h.store.issues.list().flatMap((i) => i.traceIds));
   return h.store
     .verdicts({ passed: false })
     .reverse()
-    .filter((v) => !filed.has(v.traceId) && !v.checks.some((c) => c.checkId === 'run_error'));
+    .filter((v) => !filed.has(v.traceId) && !v.checks.some((c) => c.checkId === 'run_error') && h.store.trace(v.traceId)?.source !== 'replay');
 }
 
-export async function diagnoseTrace(h: Healer, traceId: string): Promise<{ issue: Issue; evalCase: EvalCase; opened: boolean }> {
+export async function diagnoseTrace(h: Healer, traceId: string, origin: EvalCase['origin'] = 'failure'): Promise<{ issue: Issue; evalCase: EvalCase; opened: boolean }> {
   const { store } = h;
   const trace = store.trace(traceId);
   const verdict = store.verdictForTrace(traceId);
@@ -118,7 +119,7 @@ export async function diagnoseTrace(h: Healer, traceId: string): Promise<{ issue
     id: newId('ev'),
     createdAt: now(),
     title: out.eval_case.title,
-    origin: 'failure',
+    origin,
     sourceTraceId: trace.id,
     issueId: issue.id,
     customerId: trace.customerId,

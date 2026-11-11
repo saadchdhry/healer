@@ -7,9 +7,11 @@ import {
   seedSnapshot,
   type AgentVersion,
   type Customer,
+  type EnvSnapshot,
   type LlmClient,
   type ShopEvent,
   type Trace,
+  type TraceSource,
 } from '@healer/agent';
 import { createHealerApp } from './app.ts';
 import type { ShopClient } from './shopLink.ts';
@@ -49,6 +51,18 @@ export class FakeShop implements ShopClient {
 
   async events(after: number): Promise<ShopEvent[]> {
     return this.log.filter((e) => e.seq > after);
+  }
+
+  // Chats are recorded and answered by `reply`; no agent runs and no events are published.
+  chats: { customerId: string; threadId: string; message: string; source: TraceSource | undefined }[] = [];
+  reply: (message: string, turn: number) => string = () => 'Done.';
+  env = async (): Promise<EnvSnapshot> => seedSnapshot();
+
+  async chat(input: { customerId: string; threadId?: string; message: string; source?: TraceSource }) {
+    const threadId = input.threadId ?? `th_${crypto.randomUUID()}`;
+    const turn = this.chats.filter((c) => c.threadId === threadId).length;
+    this.chats.push({ customerId: input.customerId, threadId, message: input.message, source: input.source });
+    return { threadId, traceId: `tr_${crypto.randomUUID()}`, reply: this.reply(input.message, turn) };
   }
 
   async reset(): Promise<void> {

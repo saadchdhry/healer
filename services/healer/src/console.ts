@@ -189,12 +189,14 @@ export class Healer {
     }
   }
 
-  // Registers a job, returns it at once, and runs `work` through the queue.
-  startJob(kind: Job['kind'], label: string, refId: string | null, work: (handle: JobHandle) => Promise<void>): Job {
+  // Registers a job, returns it at once, and runs `work` through the queue. Traffic is not loop work, so it
+  // runs beside the queue (`queued` false): customers keep arriving while the loop is busy, as they would in a real shop.
+  startJob(kind: Job['kind'], label: string, refId: string | null, work: (handle: JobHandle) => Promise<void>, queued = true): Job {
     const job = this.newJob(kind, label, refId);
     this.store.jobs.put(job);
     this.emit({ type: 'job', job: structuredClone(job) });
-    this.enqueue(() => this.trackJob(kind, label, refId, work, job)).catch((err: unknown) => {
+    const run = () => this.trackJob(kind, label, refId, work, job);
+    (queued ? this.enqueue(run) : run()).catch((err: unknown) => {
       if (!(err instanceof StaleWorkError)) this.activity('run', `Job "${label}" failed: ${err instanceof Error ? err.message : String(err)}`);
     });
     return structuredClone(job);

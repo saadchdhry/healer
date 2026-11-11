@@ -27,7 +27,28 @@ const guards = z.object({
   refundEscalationThreshold: z.number().positive().nullable().optional(),
 });
 
-// Validates a Change[] at the HTTP boundary. Routed model configs come from router training, not from here.
+const router = z.object({
+  id: z.string().min(1),
+  createdAt: z.string(),
+  vocabulary: z.array(z.string()),
+  weights: z.array(z.number()),
+  bias: z.number(),
+  threshold: z.number().min(0).max(1),
+  metrics: z.object({
+    trainSize: z.number().int(),
+    valSize: z.number().int(),
+    trainAccuracy: z.number(),
+    valAccuracy: z.number(),
+    lossCurve: z.array(z.number()),
+  }),
+}).refine((r) => r.weights.length === r.vocabulary.length, 'A router needs one weight per vocabulary word');
+
+const model = z.discriminatedUnion('mode', [
+  z.object({ mode: z.literal('fixed'), tier, effort }),
+  z.object({ mode: z.literal('routed'), easyTier: tier, hardTier: tier, effort, router }),
+]);
+
+// Validates a Change[] at the HTTP boundary.
 export const changeSchema = z.union([
   z.object({ surface: z.literal('context'), op: z.literal('add'), scope, text: z.string().min(1) }),
   z.object({ surface: z.literal('context'), op: z.literal('edit'), noteId: z.string(), text: z.string().min(1) }),
@@ -35,7 +56,7 @@ export const changeSchema = z.union([
   z.object({ surface: z.literal('harness'), op: z.literal('set_system_prompt'), systemPrompt: z.string().min(1) }),
   z.object({ surface: z.literal('harness'), op: z.literal('set_tool'), name: toolName, description: z.string().min(1).optional(), enabled: z.boolean().optional() }),
   z.object({ surface: z.literal('harness'), op: z.literal('set_guards'), guards }),
-  z.object({ surface: z.literal('model'), op: z.literal('set_model'), model: z.object({ mode: z.literal('fixed'), tier, effort }) }),
+  z.object({ surface: z.literal('model'), op: z.literal('set_model'), model }),
 ]);
 
 export class ChangeError extends Error {}

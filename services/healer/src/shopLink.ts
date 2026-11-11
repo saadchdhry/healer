@@ -1,4 +1,4 @@
-import type { AgentVersion, Customer, ShopEvent } from '@healer/agent';
+import type { AgentVersion, Customer, EnvSnapshot, ShopApi, ShopEvent } from '@healer/agent';
 import type { Healer } from './console.ts';
 import { runLoop } from './loop.ts';
 
@@ -11,6 +11,9 @@ export interface ShopClient {
   // Resolves `opened` once the stream is connected; the returned promise settles when the stream ends.
   stream(onEvent: (event: ShopEvent) => void, opened: () => void, signal: AbortSignal): Promise<void>;
   reset(): Promise<void>;
+  env(): Promise<EnvSnapshot>;
+  // Sends one customer message through the shop's own chat, exactly as the shop front does.
+  chat(input: ShopApi['POST /api/shop/chat']['body']): Promise<ShopApi['POST /api/shop/chat']['res']>;
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -43,6 +46,8 @@ export function httpShopClient(baseUrl: string): ShopClient {
       return events.map(checkEvent);
     },
     reset: async () => void (await call('POST', '/api/shop/reset')),
+    env: () => call<EnvSnapshot>('GET', '/api/shop/env'),
+    chat: (input) => call('POST', '/api/shop/chat', input),
     stream: async (onEvent, opened, signal) => {
       const res = await fetch(`${baseUrl}/api/shop/events/stream`, { signal, headers: { accept: 'text/event-stream' } });
       if (!res.ok || !res.body) throw new Error(`Shop event stream answered ${res.status}`);
