@@ -1,6 +1,6 @@
 # Healer: product brief
 
-Status: draft 4 (2026-11-11). All main decisions settled. One proposal awaits confirmation: a customer simulator and seeded cases as the source of traffic (section 4.3).
+Status: draft 5 (2026-11-11). All decisions settled. Build in progress.
 
 ## Summary
 
@@ -10,7 +10,7 @@ Status: draft 4 (2026-11-11). All main decisions settled. One proposal awaits co
 - **How it runs.** Live Claude models. The agent starts on the smallest tier. A fixed, stronger model judges, diagnoses, and proposes fixes.
 - **The model surface.** Shown twice: a simulated version (moving the agent up a model tier) and a real one (training a small local router on the demo's own traces).
 - **How it is built.** TypeScript. A shop service and a healer service share one agent package. Traces flow out of the shop, new agent versions flow back in.
-- **Still to confirm.** Whether simulated customers and seeded cases supply the traffic (section 4.3).
+- **Where traffic comes from.** You chatting in the shop, simulated customers, and a library of known-tricky cases you can fire from the console.
 
 ## 1. Purpose
 
@@ -125,7 +125,7 @@ Every deep dive has three layers: what the stage is (two or three sentences), it
 
 **The console stands on its own.** It carries a live activity feed and can replay any conversation, so nobody has to watch two tabs at once.
 
-### 4.3 Where failures come from (proposed, awaiting confirmation)
+### 4.3 Where failures come from
 
 Without a tour, something has to produce traffic. One person chatting by hand makes a handful of traces, while clustering needs several similar failures and the router needs a few dozen labelled examples. Three sources:
 
@@ -160,6 +160,7 @@ Three parts, started with one command.
 | The agent being improved | Starts on Claude Haiku 5.5 (`claude-haiku-5-5`). The loop can move it to Claude Sonnet 5.5 (`claude-sonnet-5-5`), then Claude Opus 5.5 (`claude-opus-5-5`) | Tiers differ visibly in capability and in price, so both the gain and its cost show up on the scoreboard |
 | Judge, diagnosis, proposal | Claude Opus 5.5, fixed | The teacher should be stronger than the student, and the judge must not change between versions or scores stop being comparable |
 | Router | A small classifier trained locally on the demo's own traces | Decides per request whether the small model is enough. The only place where weights really change |
+| Simulated customers | Claude Haiku 5.5 | Bulk message writing, where a small model is enough |
 
 **How the model surface is shown.** Two mechanisms, one simulated and one real.
 
@@ -211,10 +212,11 @@ Build risks:
 - **The loop in code.** A small hand-written graph, no framework.
 - **Language.** TypeScript.
 
-### Awaiting confirmation
+- **Traffic sources.** The viewer, a customer simulator, and seeded cases (section 4.3).
 
-- **Traffic sources.** The customer simulator and the seeded cases in section 4.3. Without them the console would stay nearly empty.
-- **Reading of "home page".** Taken to mean the home of the console. The shop front stays at `/`.
+### Assumed
+
+- **Reading of "home page".** Taken to mean the home of the console. The shop front stays at `/`. Stated to the owner and not contradicted. Cheap to swap.
 
 ### Open
 
@@ -234,3 +236,4 @@ None.
 - 2026-11-11: Draft 2. Live Claude model confirmed. Model surface changed from a trained local classifier to a model switch, with a tier ladder, a loop-driven switch, and a visible training set proposed. Model roles added. Storyline grew to ten steps.
 - 2026-11-11: Draft 3. Small local classifier restored as a trained router alongside model switching. Manual model picker added. Summary added at the top. Framework diagram saved to `docs/self-learning-loop.svg` and embedded in section 3.
 - 2026-11-11: Draft 4. Router confirmed. Scenario, hand-written graph, and TypeScript settled. Guided tour dropped. Demo concept rewritten around two tabs (shop front and console), a clickable concept map with deep dives, lineage between objects, and a three-part architecture. Customer simulator and seeded cases proposed as traffic sources.
+- 2026-11-11: Draft 5. Traffic sources confirmed. No open decisions remain. Build started.
