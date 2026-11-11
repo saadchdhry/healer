@@ -1,14 +1,16 @@
 # Healer: product brief
 
-Status: draft 3 (2026-11-11). Live Claude model confirmed. The model surface is shown two ways: switching the main model, and really training a small local classifier. Three decisions still open in section 5.
+Status: draft 4 (2026-11-11). All main decisions settled. One proposal awaits confirmation: a customer simulator and seeded cases as the source of traffic (section 4.3).
 
 ## Summary
 
-- **What it is.** A localhost demo where a small support agent visibly gets better as it is used, with every step of the learning loop on screen.
+- **What it is.** A localhost demo in two tabs. The shop front is a small online shop with a support agent. The console shows everything happening under the hood as that agent gets better.
+- **How you explore it.** The console home is a clickable map of the learning loop. Each block opens a deep dive with live data and the raw prompts behind it. There is no guided tour.
 - **The idea it teaches.** An agent improves by changing one of three things (context, harness, model), and a growing set of evals decides which changes are kept.
 - **How it runs.** Live Claude models. The agent starts on the smallest tier. A fixed, stronger model judges, diagnoses, and proposes fixes.
 - **The model surface.** Shown twice: a simulated version (moving the agent up a model tier) and a real one (training a small local router on the demo's own traces).
-- **Still to decide.** The scenario, guided tour or sandbox, and how deep the graph view goes (section 5).
+- **How it is built.** TypeScript. A shop service and a healer service share one agent package. Traces flow out of the shop, new agent versions flow back in.
+- **Still to confirm.** Whether simulated customers and seeded cases supply the traffic (section 4.3).
 
 ## 1. Purpose
 
@@ -87,15 +89,69 @@ These are the nuances the demo should let the viewer trigger on purpose.
 - Teaching to the test: the agent passes the evals and still fails real users.
 - Noise mistaken for improvement: model output varies between runs, so a change only counts if it beats run-to-run variation. Each eval case runs several times and the gate compares pass rates.
 
-## 4. Demo concept (proposed)
+## 4. Demo concept
 
-**Shape.** A single page with three areas.
+The aim is not a guided tour. It is to show the workings under the hood, fully and clearly.
 
-1. The agent at work: a chat with a small agent operating inside a simulated environment.
-2. The loop: a live graph (run → judge → diagnose → propose → gate → promote) whose nodes light up as each stage happens, with the trace for the current run one click away.
-3. The agent's anatomy: the three surfaces with version history and diffs, the eval suite as a scoreboard that grows, and a chart of pass rate per agent version.
+### 4.1 Two tabs, two roles
 
-**Recommended scenario.** A support agent for a fictional online shop, working against a mock order database that resets for every eval run. It starts deliberately under-informed and on the smallest model tier, so its failures have three distinct causes that the loop must tell apart: missing knowledge (fix the context), loose process (fix the harness), and not enough capability (change the model).
+| Tab | Address | Who it is for | What it is |
+|---|---|---|---|
+| Shop front | `/` | The customer | The product itself. Pick a customer, see their orders, chat with the support agent, rate its replies. A thin shell, not a full store |
+| Console | `/console` | The engineer | The workings of the shop front. Everything the learning loop sees, decides, and changes |
+
+The shop front never shows any of the machinery. The console never needs the shop front's screen: it connects to it headlessly, through data only.
+
+### 4.2 Console home: the concept map
+
+The home page of the console is a live version of the framework diagram in section 3. Each block shows a current count and pulses while its stage is running. Clicking a block opens its deep dive.
+
+Every deep dive has three layers: what the stage is (two or three sentences), its live data, and its raw workings (the exact prompt sent, the exact response, timing, and cost).
+
+| Block | Its deep dive shows |
+|---|---|
+| Run | A live feed of conversations arriving from the shop, each opening its trace |
+| Traces | Run → trace → thread explorer. Every model call and tool call with exact input and output |
+| Judge | The verdict on each trace: which check failed (answer criteria, end state of the database, tool sequence), any customer rating, and the judge's own prompt and reasoning |
+| Diagnose | Failures clustered into issues. Each issue names a cause (knowledge, process, or capability) and the surface and scope it points at |
+| Propose | Proposed changes as diffs, the approval queue, and the autonomy dial |
+| Gate | Each candidate version run against the whole eval suite in a sandbox: pass rate before and after, results per case, cost per task, accepted or rejected |
+| Context | Memory by scope (shop-wide and per customer), with version history and diffs |
+| Harness | System prompt and tool definitions, with version history and diffs |
+| Model | The current tier with a manual picker, the router's training set, loss curve, held-out accuracy, and weights versions |
+| Eval suite | Every case, the failure it came from, its checks, and its pass history across versions |
+
+**Lineage.** Every object links to its neighbours, so one failure can be followed from the customer's message to the version that fixed it: trace → verdict → issue → proposal → gate run → version. Without this, a map of separate pages would hide the story of any single improvement.
+
+**The console stands on its own.** It carries a live activity feed and can replay any conversation, so nobody has to watch two tabs at once.
+
+### 4.3 Where failures come from (proposed, awaiting confirmation)
+
+Without a tour, something has to produce traffic. One person chatting by hand makes a handful of traces, while clustering needs several similar failures and the router needs a few dozen labelled examples. Three sources:
+
+1. **The viewer**, chatting in the shop front as any customer.
+2. **A customer simulator.** Headless customers played by Claude send realistic messages through the same chat interface real customers use. Started from the console, for example "send 20 customers".
+3. **Seeded cases.** A small library of known-tricky customers that can be fired one at a time from the console. This is not a tour: there is no order and no scripted outcome. It guarantees each concept can be reproduced on demand.
+
+### 4.4 Architecture
+
+Three parts, started with one command.
+
+| Part | What it does | Connection |
+|---|---|---|
+| Agent package | The graph runner and the support agent, as a function of (agent version, environment, message) that returns a reply and a trace. Shared code, not a service | Imported by both services |
+| Shop service | Serves the shop front, holds the live order database, runs the agent on the current version, emits every trace | Sends traces out. Reads the current agent version |
+| Healer service | Serves the console. Ingests traces, then runs judge, diagnose, propose, and gate. Owns the eval suite, the sandbox, the version registry, router training, and the customer simulator | Receives traces. Publishes versions |
+
+- The contract between the two services is narrow: traces flow out of the shop, versions flow in. The shop knows nothing about judges or evals and keeps working if the healer is stopped.
+- One limit on "headless": observing is headless, but the gate has to run the agent itself, on candidate versions, in a sandbox. That is why the agent is a shared package and not locked inside the shop service.
+- The loop is a small hand-written graph in TypeScript with no framework: nodes, edges, and shared state. The graph defined in code matches the console's concept map one to one.
+- State lives in a local database file. A "reset to factory" control returns the agent to version 0 and clears the history.
+- A cost meter in the console shows API spend for the session by role. Checks that can be done in code are done in code, and the model judge is used only where judgement is needed.
+
+### 4.5 Scenario, models, and coverage
+
+**Scenario.** A support agent for a fictional online shop, working against a mock order database that resets for every eval run. It starts deliberately under-informed and on the smallest model tier, so its failures have three distinct causes that the loop must tell apart: missing knowledge (fix the context), loose process (fix the harness), and not enough capability (change the model).
 
 **Models.** The Claude roles call the live API. The router runs locally.
 
@@ -118,21 +174,21 @@ These are the nuances the demo should let the viewer trigger on purpose.
 - Training data: past runs labelled by whether the small model passed. The labels come for free from eval runs the gate already performs on both tiers.
 - The model: a bag-of-words classifier that trains in under a second on a few dozen examples. The viewer sees the training set, the loss curve, accuracy on held-out cases, and a new weights version.
 - The gate applies to weights too. A router that sends hard cases to the small model lowers the pass rate and is rejected. A good one holds the pass rate and cuts cost per task.
-- A "generate traffic" control has Claude write realistic customer messages to grow the training set.
+- The customer simulator in section 4.3 supplies enough traffic to grow the training set.
 
 Build risks:
 
 - The hard eval cases that separate the tiers must be found by experiment. If the smallest model passes everything, the cases get harder or the ladder starts from an older model.
 - With only a few dozen examples the router will be rough. That is acceptable as long as the gate keeps bad versions out and the screen says the scale is a toy.
 
-Guided storyline, each step one click:
+**Situations the demo must be able to produce.** Not a script and in no fixed order. Each is backed by a seeded case so it can be reproduced on demand.
 
-| Step | What the viewer sees | Concept it teaches |
+| # | Situation | Concept it shows |
 |---|---|---|
 | 1 | Agent refunds an order that is outside the refund window | Failure detected by checking the end state of the environment |
 | 2 | The trace is opened and the failure is diagnosed as a knowledge gap | Traces, diagnosis |
 | 3 | A policy note is added to shared context, and the case becomes an eval | Context learning at org scope, the eval suite growing |
-| 4 | The viewer states a personal preference, and it is saved for them only | Context learning at user scope |
+| 4 | A customer states a personal preference, and it is saved for that customer only | Context learning at user scope |
 | 5 | Several traces show refunds issued without looking up the order first. They are clustered into one issue and a prompt or tool change is proposed as a diff | Harness learning, tool-sequence criteria, human approval |
 | 6 | An over-broad fix is proposed and the gate rejects it because older evals now fail | The ratchet, regression |
 | 7 | A hard case keeps failing even though the trace shows the agent had the right knowledge and instructions. It is diagnosed as a capability gap, a move to the next model tier is proposed, and the gate shows pass rate against cost per task | The model as a surface, telling causes apart, the price of the most expensive lever |
@@ -148,23 +204,28 @@ Guided storyline, each step one click:
 
 - **Live model.** The agent and the loop run on live Claude models. The API key is supplied by the owner in a local `.env` file that is never committed.
 - **Model surface.** Both mechanisms are in. Switching the main model across tiers is the simulated improvement, proposed by the loop and also available as a manual picker. Training a small local classifier on traces is the real improvement.
+- **The classifier's job.** A router that decides per request whether the small model is enough. This gives the classifier a real role and ties it to model switching.
+- **Scenario.** A support agent for a fictional online shop.
+- **No guided tour.** The demo shows the workings under the hood. The console home is a clickable concept map, and each block opens a deep dive.
+- **Two tabs.** The shop front at `/` is the product. The console at `/console` reflects its workings and connects to it headlessly. More than one service is allowed.
+- **The loop in code.** A small hand-written graph, no framework.
+- **Language.** TypeScript.
 
 ### Awaiting confirmation
 
-- **The classifier's job.** Proposed: a router that decides per request whether the small model is enough. This gives the classifier a real role and ties it to model switching. Alternative: an intent classifier (refund, order status, complaint) that is independent of model tiers, which is simpler but does not change the agent's results.
+- **Traffic sources.** The customer simulator and the seeded cases in section 4.3. Without them the console would stay nearly empty.
+- **Reading of "home page".** Taken to mean the home of the console. The shop front stays at `/`.
 
 ### Open
 
-Each has a recommended default. Nothing gets built until these are settled.
-
-1. **Scenario.** Recommended: the support agent above, because it has write actions, policies, and personal preferences, which together exercise every eval type and every scope. Alternative: a data analyst over a small database (closer to the Hex example in the talk), where answers are numbers and easy to check but there are no write actions.
-2. **Guided tour or sandbox?** Recommended: both. A guided storyline for first understanding, then free play.
-3. **Depth of the graph view.** Is the goal to see the loop as a concept, or also to see it as an executable graph of nodes and edges (in the style of LangGraph) whose code is readable as a teaching artifact?
+None.
 
 ## 6. Out of scope
 
 - Fine-tuning or reinforcement learning of the Claude models themselves. Real training happens only on the small local router.
-- Multi-user accounts, authentication, deployment.
+- A full storefront. The shop front is an orders list and a support chat, with no catalogue or checkout.
+- A guided tour or scripted walkthrough.
+- Multi-user accounts, authentication, deployment. Customers are picked from a list.
 - Production-grade observability. Traces live in a local file or local database.
 
 ## 7. Change log
@@ -172,3 +233,4 @@ Each has a recommended default. Nothing gets built until these are settled.
 - 2026-11-11: Draft 1. Source framework captured from the talk, thinking framework proposed, demo concept and open decisions drafted.
 - 2026-11-11: Draft 2. Live Claude model confirmed. Model surface changed from a trained local classifier to a model switch, with a tier ladder, a loop-driven switch, and a visible training set proposed. Model roles added. Storyline grew to ten steps.
 - 2026-11-11: Draft 3. Small local classifier restored as a trained router alongside model switching. Manual model picker added. Summary added at the top. Framework diagram saved to `docs/self-learning-loop.svg` and embedded in section 3.
+- 2026-11-11: Draft 4. Router confirmed. Scenario, hand-written graph, and TypeScript settled. Guided tour dropped. Demo concept rewritten around two tabs (shop front and console), a clickable concept map with deep dives, lineage between objects, and a three-part architecture. Customer simulator and seeded cases proposed as traffic sources.
