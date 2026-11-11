@@ -1,4 +1,5 @@
 // HTTP contract. Keys are "METHOD path"; services implement them and the web client is typed from them.
+// Every non-2xx response is JSON { error: string; message?: string }: a short machine code and a plain sentence.
 
 import type {
   ActivityEntry,
@@ -135,7 +136,7 @@ export interface HealerApi {
   'GET /api/healer/traces': Route<
     TraceSummary[],
     never,
-    { source?: TraceSource; verdict?: 'pass' | 'fail' | 'pending'; versionId?: number; limit?: number }
+    { source?: TraceSource; verdict?: 'pass' | 'fail' | 'pending'; versionId?: number; customerId?: string; limit?: number }
   >;
   'GET /api/healer/traces/:id': Route<TraceDetail>;
   'GET /api/healer/threads/:id': Route<TraceSummary[]>;
@@ -143,6 +144,7 @@ export interface HealerApi {
   // Judge.
   'GET /api/healer/rules': Route<PolicyRule[]>;
   'GET /api/healer/verdicts': Route<Verdict[], never, { passed?: boolean; limit?: number }>;
+  'GET /api/healer/verdicts/:id': Route<{ verdict: Verdict; lineage: Lineage }>;
   'POST /api/healer/traces/:id/judge': Route<Verdict>;
 
   // Diagnose.

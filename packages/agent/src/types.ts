@@ -457,6 +457,7 @@ export interface Job {
   startedAt: string;
   endedAt: string | null;
   error?: string;
+  // What the job belongs to: gate → proposal id, propose → issue id, eval → eval run id, diagnose → null.
   refId: string | null;
 }
 
