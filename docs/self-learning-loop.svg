@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="388" viewBox="0 0 680 388" role="img" aria-labelledby="title desc">
+<title id="title">Self-learning loop framework</title>
+<desc id="desc">Four loop stages in a row: run, judge, diagnose, propose. Propose leads to a gate that asks whether all evals pass. The gate promotes a change into one of three things that can change: context, harness, or model. The new agent version feeds back into run. Underneath sit two foundations: traces and the eval suite.</desc>
+<style>
+text { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif; text-anchor: middle; dominant-baseline: central; }
+.h { font-size: 14px; font-weight: 600; fill: #2C2C2A; }
+.s { font-size: 12px; fill: #5F5E5A; }
+.lbl { font-size: 12px; fill: #5F5E5A; text-anchor: start; dominant-baseline: auto; }
+.bg { fill: #FFFFFF; }
+.box { fill: #F1EFE8; stroke: #888780; stroke-width: 0.75; }
+.teal { fill: #E1F5EE; stroke: #0F6E56; stroke-width: 0.75; }
+.teal-title { fill: #085041; }
+.teal-sub { fill: #0F6E56; }
+.pur { fill: #EEEDFE; stroke: #534AB7; stroke-width: 0.75; }
+.pur-title { fill: #3C3489; }
+.pur-sub { fill: #534AB7; }
+.arr { stroke: #5F5E5A; stroke-width: 1.5; fill: none; }
+.head { stroke: #5F5E5A; stroke-width: 1.5; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.group { fill: none; stroke: #B4B2A9; stroke-width: 1; stroke-dasharray: 4 4; }
+@media (prefers-color-scheme: dark) {
+  .h { fill: #F1EFE8; }
+  .s { fill: #B4B2A9; }
+  .lbl { fill: #B4B2A9; }
+  .bg { fill: #1C1C1A; }
+  .box { fill: #2C2C2A; stroke: #888780; }
+  .teal { fill: #085041; stroke: #5DCAA5; }
+  .teal-title { fill: #9FE1CB; }
+  .teal-sub { fill: #5DCAA5; }
+  .pur { fill: #3C3489; stroke: #AFA9EC; }
+  .pur-title { fill: #CECBF6; }
+  .pur-sub { fill: #AFA9EC; }
+  .arr { stroke: #B4B2A9; }
+  .head { stroke: #B4B2A9; }
+  .group { stroke: #5F5E5A; }
+}
+</style>
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path class="head" d="M2 1L8 5L2 9"/></marker>
+</defs>
+<rect class="bg" x="0" y="0" width="680" height="388" rx="8"/>
+
+<rect class="box" x="40" y="40" width="120" height="56" rx="8"/>
+<text class="h" x="100" y="58">Run</text>
+<text class="s" x="100" y="78">Agent acts</text>
+
+<rect class="box" x="200" y="40" width="120" height="56" rx="8"/>
+<text class="h" x="260" y="58">Judge</text>
+<text class="s" x="260" y="78">Was it good?</text>
+
+<rect class="box" x="360" y="40" width="120" height="56" rx="8"/>
+<text class="h" x="420" y="58">Diagnose</text>
+<text class="s" x="420" y="78">Why and where</text>
+
+<rect class="box" x="520" y="40" width="120" height="56" rx="8"/>
+<text class="h" x="580" y="58">Propose</text>
+<text class="s" x="580" y="78">Draft a fix</text>
+
+<line class="arr" x1="166" y1="68" x2="194" y2="68" marker-end="url(#arrow)"/>
+<line class="arr" x1="326" y1="68" x2="354" y2="68" marker-end="url(#arrow)"/>
+<line class="arr" x1="486" y1="68" x2="514" y2="68" marker-end="url(#arrow)"/>
+<line class="arr" x1="580" y1="102" x2="580" y2="160" marker-end="url(#arrow)"/>
+
+<rect class="group" x="28" y="136" width="464" height="104" rx="8"/>
+<text class="lbl" x="40" y="154">What can change</text>
+
+<rect class="teal" x="40" y="168" width="120" height="56" rx="8"/>
+<text class="h teal-title" x="100" y="186">Context</text>
+<text class="s teal-sub" x="100" y="206">Memory, notes</text>
+
+<rect class="teal" x="200" y="168" width="120" height="56" rx="8"/>
+<text class="h teal-title" x="260" y="186">Harness</text>
+<text class="s teal-sub" x="260" y="206">Prompts, tools</text>
+
+<rect class="teal" x="360" y="168" width="120" height="56" rx="8"/>
+<text class="h teal-title" x="420" y="186">Model</text>
+<text class="s teal-sub" x="420" y="206">Weights</text>
+
+<rect class="box" x="520" y="168" width="120" height="56" rx="8"/>
+<text class="h" x="580" y="186">Gate</text>
+<text class="s" x="580" y="206">All evals pass?</text>
+
+<line class="arr" x1="514" y1="196" x2="498" y2="196" marker-end="url(#arrow)"/>
+<line class="arr" x1="100" y1="130" x2="100" y2="102" marker-end="url(#arrow)"/>
+
+<rect class="group" x="28" y="264" width="612" height="104" rx="8"/>
+<text class="lbl" x="40" y="282">Foundations under every stage</text>
+
+<rect class="pur" x="40" y="296" width="290" height="56" rx="8"/>
+<text class="h pur-title" x="185" y="314">Traces</text>
+<text class="s pur-sub" x="185" y="334">Evidence of what happened</text>
+
+<rect class="pur" x="350" y="296" width="278" height="56" rx="8"/>
+<text class="h pur-title" x="489" y="314">Eval suite</text>
+<text class="s pur-sub" x="489" y="334">Grows with every failure</text>
+</svg>
