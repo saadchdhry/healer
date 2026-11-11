@@ -1,0 +1,16 @@
+html,
+body {
+  margin: 0;
+}
+body {
+  background: #eef3e6;
+  -webkit-font-smoothing: antialiased;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) body {
+    background: #131a12;
+  }
+}
+:root[data-theme='dark'] body {
+  background: #131a12;
+}
