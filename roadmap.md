@@ -34,7 +34,7 @@ Conventions that apply to all work here: no code comments unless the reason is n
 
 The router is the only place in the demo where model weights really change, and today it cannot train.
 
-It was designed to learn "which requests does the small model fail and the large model get right". The build measured this and found almost no such requests. Once the shop's rules are in the agent's context, Haiku 5.5 behaves the same as Sonnet 5.5 on nearly everything. In one run of 40 requests, replayed 160 times on Haiku, it never contradicted Sonnet. On the hardest request found (three orders refunded in one message) it made an arithmetic error about once in 17 tries. A classifier cannot learn from an event that rare, so the dataset has no positive examples and training refuses to run.
+It was designed to learn "which requests does the small model fail and the large model get right". The build measured this and found almost no such requests. Once the shop's rules are in the agent's context, Haiku 5.5 behaves the same as Sonnet 5.5 on nearly everything. In one run of 40 requests, replayed 160 times on Haiku, it never contradicted Sonnet. On the hardest request found (three orders refunded in one message) it made an arithmetic error about once in 17 tries. A classifier cannot learn from an event that rare. Depending on the run, the dataset has no positive examples and training refuses to run, or it has a single one and training produces a router that sends everything to the small model.
 
 The fix is to change what the router learns. When failures are rare, the useful question is not "will the small model fail this request" but "how much does a failure on this request cost". A wrong answer to "where is my order" costs little. A wrong refund moves money. So the router should learn which requests carry risk and send those to the stronger model, while lookups and questions stay on the small one. This is how routing is commonly done in practice when failures are too rare to learn from, and every arithmetic error the build measured falls inside the risky class, so the measured gap stays covered.
 
@@ -43,7 +43,7 @@ The fix is to change what the router learns. When failures are rare, the useful 
 - `services/healer/src/routerTraining.ts`, `startDatasetJob`: takes real customer messages from stored traces, replays each in a sandbox four times on the easy tier (`EASY_REPLAYS`, tier `haiku`) and once on the hard tier (the "reference"), all with the live version's context and harness.
 - `wrongness(easy, reference)` in the same file decides whether an easy replay is wrong: it broke a policy rule in code, or the reference kept every rule and the easy replay made a write the reference did not make, or refunded a different amount or method. Asking a question where the reference acted does not count as wrong. No model judge is involved.
 - A `RouterExample` (in `packages/agent/src/types.ts`) gets `needsStrong: true` only when at least one easy replay is wrong and the reference passes policy.
-- `POST /api/healer/model/router/train` answers 409 with "The dataset has no requests that needed the stronger model yet..." when there are no positives. With the rules in context, that is what happens.
+- `POST /api/healer/model/router/train` answers 409 with "The dataset has no requests that needed the stronger model yet..." when there are no positives. With the rules in context, that is the usual outcome. Some runs find one positive, and training then succeeds but every strongly weighted word pushes toward the small tier.
 - `trainRouter` and `predictRoute` in `packages/agent/src/router.ts` are a bag-of-words logistic regression. They work and are tested.
 - `services/healer/src/gate.ts` has a deterministic check for routed candidates: every enabled eval case that belongs to an issue with cause `capability` must be routed to the hard tier, or the proposal is rejected.
 - The console's Model page is `web/src/console/pages/Model.tsx`. It shows the dataset, class balance, the loss curve, train and validation accuracy, positives, and validation recall.
@@ -382,6 +382,68 @@ Under $0.50: two or three fired seeded cases with their judge calls. The restore
 - **A data-only reset of every order.** Set aside as the main fix because it also undoes the viewer's own chats on unrelated orders, but the same route without `orderIds` could offer it later.
 - **Pick a fresh order that matches the case.** Set aside because most cases depend on one specific order (the only opened item, the only final-sale item), and the `teaches` lines quote exact amounts.
 - **Warn only.** Set aside because the warning already exists and the cure it offers, a factory reset, throws away the viewer's progress.
+
+---
+
+## Defects to fix
+
+Found on 2026-11-13 while performing the full walkthrough in `demo-beats.md` against live models. These are smaller than the items above, so each is written as: what happens, how to see it, where the code is, and a suggested fix. The suggested fix is a starting point, not a decision.
+
+### A failure that also states a preference is never diagnosed
+
+- **What happens.** When one customer message both breaks a shop rule and states a personal preference, the judge files a customer-scope preference issue that holds the trace. The loop then treats that trace as already filed and skips diagnosis. No shop-scope issue and no eval case are written, so the shop rule is learned as a note for one customer only, and the ratchet gains nothing.
+- **How to see it.** In automatic mode, fire the seeded case "New address for a shipped order". On the verified run it produced only the customer note "Remember Lena's new address and only apply it to orders still processing".
+- **Where.** The judge branch of the loop in `services/healer/src/loop.ts`, and `undiagnosed()` in `services/healer/src/diagnose.ts`. The preference issue is created in `services/healer/src/judge.ts`.
+- **Suggested fix.** Decide "already filed" per kind of issue. A preference issue must not stop a failed verdict on the same trace from being diagnosed. Add a loop test with a failed verdict that also carries a preference.
+
+### A rejected proposal cannot be gated again
+
+- **What happens.** On a rejected proposal the "Run the gate" button stays enabled, but the server answers that only a draft can be gated. When the gate rejected a good fix because diagnosis wrote a check that was too strict, the viewer can edit the check but cannot re-run the gate. They must write the same proposal again by hand.
+- **How to see it.** Open any rejected proposal and press "Run the gate".
+- **Where.** `web/src/console/pages/Propose.tsx` for the button, and the `POST /api/healer/proposals/:id/gate` route in `services/healer/src/app.ts`.
+- **Suggested fix.** Disable the button unless the proposal is a draft. Add a "Propose again" action on a rejected proposal that creates a new draft with the same changes on the current live version. This pairs with roadmap item 3.
+
+### Approving one queued proposal strands the others
+
+- **What happens.** Several proposals can wait in the approval queue, all gated against the same live version. Approving one makes a new live version, and the rest remain in the queue marked as gated against a version that is no longer live. They can only be discarded. Nothing gates them again.
+- **How to see it.** In approve mode, let two issues reach the approval queue, then approve one.
+- **Where.** Proposal status handling in `services/healer/src/promote.ts` and `services/healer/src/gate.ts`, and the queue on `web/src/console/pages/Propose.tsx`.
+- **Suggested fix.** When a version is promoted, move the other waiting proposals back to draft, rebuilt on the new live version, and in approve or automatic mode queue their gates again. Say in the activity feed that this happened.
+
+### Running the suite can silently do nothing
+
+- **What happens.** "Run the suite on this version" reuses an earlier run when one already covers every enabled case. The job finishes in a few milliseconds with no new row and no message, so it looks broken.
+- **How to see it.** Run the suite on a version twice in a row.
+- **Where.** `reusableRun` in `services/healer/src/evalRunner.ts`, the `POST /api/healer/evals/run` route in `services/healer/src/app.ts`, and `web/src/console/pages/Evals.tsx`.
+- **Suggested fix.** Reuse is right for the gate, where it saves money. For a run the viewer asked for by hand, either always run fresh, or say plainly that the earlier run was reused and offer to run again anyway.
+
+### A saved preference can ask the agent to break policy
+
+- **What happens.** The judge records what a customer says they prefer, and the loop turns it into a customer note. On an exploratory run it saved "Prefers refunds to a bank card rather than store credit" for a customer whose order was paid with store credit. A later probe showed the agent refunding that order to a card, which breaks the refund-method rule. A customer note has no eval case of its own, so its gate only checks for regressions and let it through.
+- **How to see it.** As a customer with a store-credit order, say you always want refunds on your card, let the note deploy, then ask for a refund.
+- **Where.** The preference extraction in `services/healer/src/judge.ts`, and how preference issues become proposals in `services/healer/src/propose.ts`.
+- **Suggested fix.** Tell the judge to record only facts and preferences the shop is free to honour, and to leave out requests about money, eligibility or exceptions. Consider writing one eval case with each customer note, run as that customer with an `invariant` check, so the gate can see a note that leads to a rule being broken.
+
+### Simulated customers contradict what the agent has learned about them
+
+- **What happens.** The simulator does not know a customer's saved notes. After a customer asked to be called Annie, a simulated message from the same customer said "My name is Ava Thompson, not Annie", which created a contradicting preference. Notes pile up and conflict, which is the "memory rot" failure in `brief.md` section 3.5.
+- **How to see it.** Save a preference for a customer, then send a batch of simulated customers.
+- **Where.** `services/healer/src/simulate.ts`, and note handling in `services/healer/src/propose.ts`.
+- **Suggested fix.** Two parts, and either helps alone. Give the simulator the customer's current notes so it stays in character. When a new preference conflicts with an existing note for the same customer, have the proposer edit or remove the old note instead of adding a second one. `Change` already has `edit` and `remove` operations for context.
+
+### Diagnosis can call a missing rule a capability gap
+
+- **What happens.** On an exploratory run, refunds issued on orders that had not been delivered were diagnosed as a capability gap, although no note in context stated the rule. The loop proposed moving the agent to Sonnet. The gate rejected it, because the case still failed and cost per task rose about seventeenfold, so the ratchet held. But the real fix, a context note, was never proposed.
+- **How to see it.** Not dependable. It depends on the diagnosis model's reading.
+- **Where.** The diagnosis prompt in `services/healer/src/diagnose.ts`.
+- **Suggested fix.** Before accepting `capability`, check in code or in the prompt that a note or instruction in the live version actually covers the rule named by the failed check. If none does, the cause is `knowledge`. When a model-surface proposal is rejected because its own case still fails, send the issue back to diagnosis instead of retrying the same surface.
+
+### Small interface points
+
+- The table on the Run page is wider than a narrow window, so the Verdict column needs sideways scrolling.
+- Changes to settings are logged in the activity feed under the "Propose" stage, which is misleading.
+- The shop runs on a fixed date (2026-11-11) while the console shows real clock times, which can confuse a first-time viewer. `demo-beats.md` explains it; the console could too.
+- The agent sometimes promises memory it does not have ("I'll call you Annie from now on") before any note exists, and the judge does not flag it. `demo-beats.md` uses this as a teaching point.
 
 ---
 

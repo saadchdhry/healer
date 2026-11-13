@@ -245,7 +245,7 @@ How to run it is in `README.md`. This section records what turned out differentl
 **Different from the plan.**
 
 - **The capability gap between tiers is narrow.** With the shop's rules in context, the small model matches the large one on ordinary requests. It errs only on the hardest ones, such as three orders in one message, and there only about once in 17 tries when last measured. The tier switch therefore buys the removal of a rare error at about 17 times the cost per task.
-- **The router has nothing to learn yet.** Across 160 replays the small model never contradicted the large one, so the training set had no positive examples and training correctly refused to run. The trainer, the labelling, and the gate check for routing are all built and tested. They are waiting for a signal.
+- **The router has nothing to learn yet.** Across 160 replays the small model never contradicted the large one, so the training set had no positive examples and training correctly refused to run. Later runs sometimes found a single positive example, in which case training runs and produces a router that sends everything to the small model. The trainer, the labelling, and the gate check for routing are all built and tested. They are waiting for a signal.
 - **The agent learns shop policy from failed checks, not from a document.** Policy lives only as code checks in the healer. The proposer sees the wording of a failed check and writes the note from that, one rule at a time.
 
 **Known limits.**
@@ -256,6 +256,7 @@ How to run it is in `README.md`. This section records what turned out differentl
 - Traffic changes the shop's live orders, so most seeded cases behave as described only after a reset.
 - Seeded cases can pass when the small model happens to get them right.
 - The default autonomy is "approve", so traffic alone starts paid judging, diagnosis, and gating. The console shows spend by role.
+- Performing the full walkthrough later found further defects, such as a failure that also states a preference never being diagnosed. They are listed in `roadmap.md` under "Defects to fix".
 
 **Cost.** Live testing during the build spent about $11.50. The judge is the largest share. A single failure taken from chat to deployed fix costs roughly $0.30 at three trials per case.
 
@@ -267,4 +268,4 @@ How to run it is in `README.md`. This section records what turned out differentl
 - 2026-11-11: Draft 4. Router confirmed. Scenario, hand-written graph, and TypeScript settled. Guided tour dropped. Demo concept rewritten around two tabs (shop front and console), a clickable concept map with deep dives, lineage between objects, and a three-part architecture. Customer simulator and seeded cases proposed as traffic sources.
 - 2026-11-11: Draft 5. Traffic sources confirmed. No open decisions remain. Build started.
 - 2026-11-11: Draft 6. Build complete. Added section 7 with what the build found. Router labelling description updated to match what was built. Router training signal reopened as a decision.
-- 2026-11-13: Draft 7. Router decision made (route by risk) and moved to `roadmap.md`. Leftover scaffolding deleted.
+- 2026-11-13: Draft 7. Router decision made (route by risk) and moved to `roadmap.md`. Leftover scaffolding deleted. README cut to the basics and `demo-beats.md` added as a verified walkthrough. Roadmap extended with four proposed items and the defects the walkthrough found.
