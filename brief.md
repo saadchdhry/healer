@@ -87,7 +87,7 @@ These are the nuances the demo should let the viewer trigger on purpose.
 - Memory rot: lessons pile up, contradict each other, or go stale.
 - Unreliable judge: the judge is a model too, and can be wrong.
 - Teaching to the test: the agent passes the evals and still fails real users.
-- Noise mistaken for improvement: model output varies between runs, so a change only counts if it beats run-to-run variation. Each eval case runs several times and the gate compares pass rates.
+- Noise mistaken for improvement: model output varies between runs, so a change only counts if it beats run-to-run variation. Each eval case runs several times, a case passes when most of its trials pass, and the gate compares the two versions case by case. That absorbs an off moment but hides a failure that happens one time in five (roadmap item 4).
 
 ## 4. Demo concept
 
