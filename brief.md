@@ -251,12 +251,12 @@ How to run it is in `README.md`. This section records what turned out differentl
 **Known limits.**
 
 - Refunds that are too small, or never issued, break no rule and pass the judge. Only a thumbs-down or an eval with an exact amount catches them.
-- The judge and the diagnosis are models and vary. Diagnosis sometimes writes a check that is too strict, which makes the gate reject a good fix until the check is edited.
+- The judge and the diagnosis are models and vary. Diagnosis sometimes writes a check that is too strict, which makes the gate reject a good fix until the check is edited and the proposal is proposed again.
 - A failure rate of one in five is invisible to a gate running two or three trials per case. Raise trials per case when judging model changes.
 - Traffic changes the shop's live orders, so most seeded cases behave as described only after a reset.
 - Seeded cases can pass when the small model happens to get them right.
 - The default autonomy is "approve", so traffic alone starts paid judging, diagnosis, and gating. The console shows spend by role.
-- Performing the full walkthrough later found further defects, such as a failure that also states a preference never being diagnosed. They are listed in `roadmap.md` under "Defects to fix".
+- Performing the full walkthrough found further defects. The first batch was fixed on 2026-11-13. What remains is listed in `roadmap.md` under "Defects to fix".
 
 **Cost.** Live testing during the build spent about $11.50. The judge is the largest share. A single failure taken from chat to deployed fix costs roughly $0.30 at three trials per case.
 
@@ -269,3 +269,4 @@ How to run it is in `README.md`. This section records what turned out differentl
 - 2026-11-11: Draft 5. Traffic sources confirmed. No open decisions remain. Build started.
 - 2026-11-11: Draft 6. Build complete. Added section 7 with what the build found. Router labelling description updated to match what was built. Router training signal reopened as a decision.
 - 2026-11-13: Draft 7. Router decision made (route by risk) and moved to `roadmap.md`. Leftover scaffolding deleted. README cut to the basics and `demo-beats.md` added as a verified walkthrough. Roadmap extended with four proposed items and the defects the walkthrough found.
+- 2026-11-13: First batch of walkthrough defects fixed (see "Done" in `roadmap.md`). The services can now run as a second, isolated copy for testing.

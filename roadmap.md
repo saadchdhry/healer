@@ -24,6 +24,10 @@ Two kinds of shop data matter to several items. The live shop (`services/shop/`)
 
 Conventions that apply to all work here: no code comments unless the reason is non-obvious; no error handling for things that cannot happen; validate only at boundaries; never use em dashes in any text, including prompts and interface copy; unit tests run without an API key using `ScriptedLlm` and `FakeShop`; `npm run typecheck` and `npm test` must pass across the repo.
 
+### Testing without disturbing a running copy
+
+The owner often has the demo running in their own terminal on the default ports (web 3000, shop 4311, healer 4312) with their own data in `data/`. Never reset, stop, or send test traffic to that copy. Each process takes its port and data folder from the environment (`WEB_PORT`, `SHOP_PORT`, `HEALER_PORT`, `HEALER_DATA_DIR`), so start a second, isolated copy for any live verification. The `healer-verify` entry in `.claude/launch.json` does this on web 3210, shop 4421, healer 4422 with data in `data/verify`, which is git-ignored. Reset that copy as often as needed. The owner's services watch the source files and restart on every edit, which is expected.
+
 ---
 
 ## 1. Train the router on risk, not on measured failure
@@ -387,66 +391,57 @@ Under $0.50: two or three fired seeded cases with their judge calls. The restore
 
 ## Defects to fix
 
-Found on 2026-11-13 while performing the full walkthrough in `demo-beats.md` against live models. These are smaller than the items above, so each is written as: what happens, how to see it, where the code is, and a suggested fix. The suggested fix is a starting point, not a decision.
+Smaller than the items above, so each is written as: what happens, how to see it, where the code is, and a suggested fix. The suggested fix is a starting point, not a decision. These were noticed on 2026-11-13 while fixing the first batch of defects (see "Done").
 
-### A failure that also states a preference is never diagnosed
+### A proposal for one customer's preference can change shop-wide notes
 
-- **What happens.** When one customer message both breaks a shop rule and states a personal preference, the judge files a customer-scope preference issue that holds the trace. The loop then treats that trace as already filed and skips diagnosis. No shop-scope issue and no eval case are written, so the shop rule is learned as a note for one customer only, and the ratchet gains nothing.
-- **How to see it.** In automatic mode, fire the seeded case "New address for a shipped order". On the verified run it produced only the customer note "Remember Lena's new address and only apply it to orders still processing".
-- **Where.** The judge branch of the loop in `services/healer/src/loop.ts`, and `undiagnosed()` in `services/healer/src/diagnose.ts`. The preference issue is created in `services/healer/src/judge.ts`.
-- **Suggested fix.** Decide "already filed" per kind of issue. A preference issue must not stop a failed verdict on the same trace from being diagnosed. Add a loop test with a failed verdict that also carries a preference.
+- **What happens.** A preference issue is about one customer, so its proposal should only add, edit or remove notes at that customer's scope. Twice, on a retry after a rejected gate, the proposer instead edited a shop-wide note ("tighten the return note", "restate processing-only rule for cancellations"). A change that affects every customer then rides in under an issue about one.
+- **How to see it.** Not dependable. It happened when a customer-note proposal was rejected and the proposer tried again.
+- **Where.** `createProposal`, `changeSchema` and the proposer's instructions in `services/healer/src/propose.ts`. Issues carry `kind: 'failure' | 'preference'` and a `scope`.
+- **Suggested fix.** Enforce it in code, not only in the prompt: for an issue of kind `preference`, refuse any change that is not a context change at that customer's scope, and count the refusal as a failed attempt so the proposer tries again within the retry limit.
 
-### A rejected proposal cannot be gated again
+### Noise alone can reject a harmless customer note
 
-- **What happens.** On a rejected proposal the "Run the gate" button stays enabled, but the server answers that only a draft can be gated. When the gate rejected a good fix because diagnosis wrote a check that was too strict, the viewer can edit the check but cannot re-run the gate. They must write the same proposal again by hand.
-- **How to see it.** Open any rejected proposal and press "Run the gate".
-- **Where.** `web/src/console/pages/Propose.tsx` for the button, and the `POST /api/healer/proposals/:id/gate` route in `services/healer/src/app.ts`.
-- **Suggested fix.** Disable the button unless the proposal is a draft. Add a "Propose again" action on a rejected proposal that creates a new draft with the same changes on the current live version. This pairs with roadmap item 3.
+- **What happens.** A note that only stores a name has no eval case of its own, so its gate only checks for regressions. Twice it was rejected because one unrelated case passed 1 of 2 trials on the candidate. Nothing about the note caused that. The model's run-to-run variation did.
+- **How to see it.** Set trials per eval case to 2, save a name preference, and gate its proposal a few times.
+- **Where.** `decide` in `services/healer/src/gate.ts` and the trial handling in `services/healer/src/evalRunner.ts`.
+- **Suggested fix.** Before rejecting for a regression, run the regressed case again on both versions and reject only if it fails again. This is the mirror image of roadmap item 4, which makes the gate stricter where a failure is costly, and the two should be designed together.
 
-### Approving one queued proposal strands the others
+### Diagnosis can write an eval case that flips between passing and failing
 
-- **What happens.** Several proposals can wait in the approval queue, all gated against the same live version. Approving one makes a new live version, and the rest remain in the queue marked as gated against a version that is no longer live. They can only be discarded. Nothing gates them again.
-- **How to see it.** In approve mode, let two issues reach the approval queue, then approve one.
-- **Where.** Proposal status handling in `services/healer/src/promote.ts` and `services/healer/src/gate.ts`, and the queue on `web/src/console/pages/Propose.tsx`.
-- **Suggested fix.** When a version is promoted, move the other waiting proposals back to draft, rebuilt on the new live version, and in approve or automatic mode queue their gates again. Say in the activity feed that this happened.
+- **What happens.** A case written from a rubric failure ("Cancel request on shipped order PM-1013 without inventing return policy") passed on some trials and failed on others for the same version. An unstable case makes every later gate a coin toss.
+- **How to see it.** Fire the seeded case "Cancel an order already shipped" a few times and run the suite repeatedly on one version.
+- **Where.** Case writing in `services/healer/src/diagnose.ts`, rubric grading in `services/healer/src/judge.ts` (`gradeRubrics`).
+- **Suggested fix.** Fold this into roadmap item 3, which tests a new case before it joins the suite: add a stability test that runs the case several times on one version and sets it aside if the results disagree. Prefer checks decided in code over rubric checks wherever the failure can be stated as a tool call or an end state.
 
-### Running the suite can silently do nothing
+### The agent promises memory it does not have
 
-- **What happens.** "Run the suite on this version" reuses an earlier run when one already covers every enabled case. The job finishes in a few milliseconds with no new row and no message, so it looks broken.
-- **How to see it.** Run the suite on a version twice in a row.
-- **Where.** `reusableRun` in `services/healer/src/evalRunner.ts`, the `POST /api/healer/evals/run` route in `services/healer/src/app.ts`, and `web/src/console/pages/Evals.tsx`.
-- **Suggested fix.** Reuse is right for the gate, where it saves money. For a run the viewer asked for by hand, either always run fresh, or say plainly that the earlier run was reused and offer to run again anyway.
+- **What happens.** When a customer states a preference, the agent replies as if it will remember ("I'll call you Annie from now on", "I'll keep that in mind"), before any note exists and whether or not one is ever saved. The judge passes these replies.
+- **How to see it.** In the shop, tell the agent a preference and read the reply.
+- **Where.** The judge's rubric in `services/healer/src/judge.ts`, and the factory system prompt in `factoryVersion()` in `packages/agent/src/supportAgent.ts`.
+- **Suggested fix.** Decide first whether this should be fixed by hand or left for the loop to find, since it is a good example of a failure the judge cannot see yet. If fixing: add a rubric criterion that the reply makes no promise about future conversations, and let the loop learn the system prompt change. `demo-beats.md` beat 10 uses the current behaviour as a teaching point and would need updating.
 
-### A saved preference can ask the agent to break policy
+### Discard is offered on a proposal that cannot be discarded
 
-- **What happens.** The judge records what a customer says they prefer, and the loop turns it into a customer note. On an exploratory run it saved "Prefers refunds to a bank card rather than store credit" for a customer whose order was paid with store credit. A later probe showed the agent refunding that order to a card, which breaks the refund-method rule. A customer note has no eval case of its own, so its gate only checks for regressions and let it through.
-- **How to see it.** As a customer with a store-credit order, say you always want refunds on your card, let the note deploy, then ask for a refund.
-- **Where.** The preference extraction in `services/healer/src/judge.ts`, and how preference issues become proposals in `services/healer/src/propose.ts`.
-- **Suggested fix.** Tell the judge to record only facts and preferences the shop is free to honour, and to leave out requests about money, eligibility or exceptions. Consider writing one eval case with each customer note, run as that customer with an `invariant` check, so the gate can see a note that leads to a rule being broken.
-
-### Simulated customers contradict what the agent has learned about them
-
-- **What happens.** The simulator does not know a customer's saved notes. After a customer asked to be called Annie, a simulated message from the same customer said "My name is Ava Thompson, not Annie", which created a contradicting preference. Notes pile up and conflict, which is the "memory rot" failure in `brief.md` section 3.5.
-- **How to see it.** Save a preference for a customer, then send a batch of simulated customers.
-- **Where.** `services/healer/src/simulate.ts`, and note handling in `services/healer/src/propose.ts`.
-- **Suggested fix.** Two parts, and either helps alone. Give the simulator the customer's current notes so it stays in character. When a new preference conflicts with an existing note for the same customer, have the proposer edit or remove the old note instead of adding a second one. `Change` already has `edit` and `remove` operations for context.
-
-### Diagnosis can call a missing rule a capability gap
-
-- **What happens.** On an exploratory run, refunds issued on orders that had not been delivered were diagnosed as a capability gap, although no note in context stated the rule. The loop proposed moving the agent to Sonnet. The gate rejected it, because the case still failed and cost per task rose about seventeenfold, so the ratchet held. But the real fix, a context note, was never proposed.
-- **How to see it.** Not dependable. It depends on the diagnosis model's reading.
-- **Where.** The diagnosis prompt in `services/healer/src/diagnose.ts`.
-- **Suggested fix.** Before accepting `capability`, check in code or in the prompt that a note or instruction in the live version actually covers the rule named by the failed check. If none does, the cause is `knowledge`. When a model-surface proposal is rejected because its own case still fails, send the issue back to diagnosis instead of retrying the same surface.
-
-### Small interface points
-
-- The table on the Run page is wider than a narrow window, so the Verdict column needs sideways scrolling.
-- Changes to settings are logged in the activity feed under the "Propose" stage, which is misleading.
-- The shop runs on a fixed date (2026-11-11) while the console shows real clock times, which can confuse a first-time viewer. `demo-beats.md` explains it; the console could too.
-- The agent sometimes promises memory it does not have ("I'll call you Annie from now on") before any note exists, and the judge does not flag it. `demo-beats.md` uses this as a teaching point.
+- **What happens.** On a rejected proposal the "Discard" button is enabled, but the server refuses to discard anything that is not open.
+- **How to see it.** Open a rejected proposal and press "Discard".
+- **Where.** `web/src/console/pages/Propose.tsx` and the `POST /api/healer/proposals/:id/discard` route in `services/healer/src/app.ts`.
+- **Suggested fix.** Enable the button only for the statuses the server accepts.
 
 ---
 
 ## Done
 
-Nothing yet.
+### 2026-11-13: first batch of defects from the walkthrough
+
+All found by performing `demo-beats.md` end to end, fixed with unit tests, and checked live on the isolated copy unless noted.
+
+- **A failure that also states a preference is now diagnosed.** Issues carry `kind: 'failure' | 'preference'`, and a preference issue no longer hides a failed verdict on the same trace. The failure is handled first. Covered by a loop test; the combined case did not occur in the live check.
+- **A rejected proposal can be proposed again.** New route `POST /api/healer/proposals/:id/again` and a "Propose again" button create a new draft with the same changes on the live version. "Run the gate" is enabled only for a draft.
+- **Approving one queued proposal no longer strands the others.** After a promotion, each waiting proposal is rebuilt on the new live version (`reproposeOnLive` in `gate.ts`) and, outside manual mode, gated again. One that no longer applies is discarded with the reason.
+- **A suite run started by hand always runs.** It adds a new row every time. The gate still reuses earlier runs to save money.
+- **Saved preferences are limited to what the shop is free to honour.** The judge and the proposer record a name, tone, language or contact preference, and never requests about refunds, payment methods, money, eligibility, deadlines or exceptions.
+- **Simulated customers stay consistent with saved notes.** The simulator is given the customer's notes, and a changed preference edits the old note instead of adding a second one.
+- **A capability diagnosis needs proof.** Diagnosis must quote the note or instruction that already covers the rule, and code checks the quote against the live version; otherwise the cause becomes a knowledge gap. When a move to a stronger model is rejected because the issue's own case still fails, the issue is diagnosed again. Covered by tests; not seen live.
+- **Interface points.** The Run table fits a narrow window, settings changes appear under "Settings" in the activity feed, and the console home shows the shop's fixed date.
+- **Isolated copy for testing.** Ports and the data folder can be set from the environment, with a `healer-verify` launch entry (see "Testing without disturbing a running copy").
