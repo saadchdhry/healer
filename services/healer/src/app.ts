@@ -31,7 +31,6 @@ import { SEEDED_CASES, startFireJob } from './seeds.ts';
 import { followShop, handleShopEvent, type ShopClient } from './shopLink.ts';
 import { startSimulateJob } from './simulate.ts';
 import { HealerStore, SANDBOX_SOURCES } from './store.ts';
-import { registerStubs } from './stubs.ts';
 
 type Res<K extends keyof HealerApi> = HealerApi[K]['res'];
 
@@ -517,7 +516,6 @@ export function createHealerApp(options: HealerOptions) {
 
   app.get('/api/healer/findings', (c) => c.json<Res<'GET /api/healer/findings'>>(store.findings.list().reverse()));
 
-  registerStubs(app);
 
   return {
     app,
