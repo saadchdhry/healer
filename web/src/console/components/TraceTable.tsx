@@ -24,29 +24,29 @@ export function TraceTable({ traces, showOutput = false, highlight }: { traces: 
         <tr>
           <th>Time</th>
           <th>Trace</th>
-          <th>Customer</th>
-          <th>Source</th>
-          <th>Version</th>
+          <th className="mid-only">Customer</th>
+          <th className="mid-only">Source</th>
+          <th className="wide-only">Version</th>
           <th>Message</th>
           {showOutput && <th>Reply</th>}
           <th>Verdict</th>
-          <th>Rating</th>
-          <th>Tier</th>
-          <th className="num">Cost</th>
+          <th className="wide-only">Rating</th>
+          <th className="wide-only">Tier</th>
+          <th className="num wide-only">Cost</th>
         </tr>
       </thead>
       <tbody>
         {traces.map((t) => (
           <tr key={t.id} className={highlight?.has(t.id) ? 'is-hl' : undefined}>
             <td className="mono hc-muted">{time(t.startedAt)}</td>
-            <td>
+            <td className="id-cell" title={t.id}>
               <IdLink kind="trace" id={t.id} />
             </td>
-            <td>
+            <td className="mid-only">
               <Link to={`/console/traces?customer=${t.customerId}`}>{name(t.customerId)}</Link>
             </td>
-            <td>{t.source}</td>
-            <td>
+            <td className="mid-only">{t.source}</td>
+            <td className="wide-only">
               <IdLink kind="version" id={t.versionId} />
             </td>
             <td className="clip" title={t.input}>
@@ -60,11 +60,11 @@ export function TraceTable({ traces, showOutput = false, highlight }: { traces: 
             <td>
               <VerdictBadge state={t.verdict} />
             </td>
-            <td>
+            <td className="wide-only">
               <RatingMark rating={t.rating} />
             </td>
-            <td>{tierName[t.tierUsed]}</td>
-            <td className="num mono">{usd(t.costUsd)}</td>
+            <td className="wide-only">{tierName[t.tierUsed]}</td>
+            <td className="num mono wide-only">{usd(t.costUsd)}</td>
           </tr>
         ))}
       </tbody>

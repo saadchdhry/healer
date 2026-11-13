@@ -1,7 +1,7 @@
 import { END, Graph, type Autonomy, type GateRun, type Verdict } from '@healer/agent';
 import { StaleWorkError, type Healer } from './console.ts';
-import { diagnoseTrace } from './diagnose.ts';
-import { gateProposal } from './gate.ts';
+import { diagnoseTrace, failureFiled, rediagnoseIssue } from './diagnose.ts';
+import { gateProposal, issueCasesStillFail } from './gate.ts';
 import { judgeTrace } from './judge.ts';
 import { approve } from './promote.ts';
 import { isOpenProposal, proposeForIssue } from './propose.ts';
@@ -21,7 +21,8 @@ interface LoopState {
   gateRun: GateRun | null;
   // Proposals made for the issue at the head of `pending`.
   attempts: number;
-  afterGate: 'promote' | 'retry' | 'next';
+  // 'rediagnose': a stronger model was rejected because the issue's own case still fails, so its cause is decided again.
+  afterGate: 'promote' | 'retry' | 'rediagnose' | 'next';
 }
 
 // One first attempt and at most two automatic retries after a rejection.
@@ -48,10 +49,18 @@ export const loopGraph = new Graph<LoopState>('improvement_loop', 'judge')
     if (s.autonomy !== 'manual') s.pending.push(...preferenceIssues.map((i) => i.id));
     return { passed: verdict.passed, failed: verdict.checks.filter((c) => !c.passed).map((c) => c.checkId), preferences: preferenceIssues.length };
   })
-  .node('diagnose', 'Diagnose', 'Name the cause of the failure (knowledge, process or capability), file it under an issue, and write an eval case for it.', async (s) => {
+  .node('diagnose', 'Diagnose', 'Name the cause of the failure (knowledge, process or capability), file it under an issue, and write an eval case for it. After the gate rejects a stronger model, decide the cause again.', async (s) => {
     s.h.checkEpoch(s.epoch);
+    if (s.afterGate === 'rediagnose') {
+      const issueId = s.pending[0]!;
+      const issue = await s.h.stage('diagnose', 'Diagnose an issue again', () => rediagnoseIssue(s.h, issueId, s.gateRun!));
+      s.afterGate = 'next';
+      if (issue.surface === 'model' || !needsProposal(s.h, issueId)) nextIssue(s);
+      return { issueId, cause: issue.cause, surface: issue.surface };
+    }
     const { issue, evalCase, opened } = await s.h.stage('diagnose', 'Diagnose a failure', () => diagnoseTrace(s.h, s.traceId));
-    if (needsProposal(s.h, issue.id) && !s.pending.includes(issue.id)) s.pending.push(issue.id);
+    // Ahead of any preference from the same message: the failure is the shop's lesson, the preference is one customer's.
+    if (needsProposal(s.h, issue.id) && !s.pending.includes(issue.id)) s.pending.unshift(issue.id);
     return { issueId: issue.id, opened, evalCaseId: evalCase.id };
   })
   .node('propose', 'Propose', "Write the smallest change to the issue's surface (context, harness or model) and build a candidate version.", async (s) => {
@@ -69,10 +78,15 @@ export const loopGraph = new Graph<LoopState>('improvement_loop', 'judge')
       s.h.trackJob('gate', `Gate proposal ${id}`, id, (job) => gateProposal(s.h, id, (done, total) => job.progress(done, total))),
     );
     const issue = s.h.store.issues.get(s.pending[0]!)!;
+    const canRetry = s.attempts < MAX_ATTEMPTS && needsProposal(s.h, issue.id);
     if (s.gateRun.decision === 'accept') {
-      s.afterGate = s.autonomy === 'auto' ? 'promote' : 'next';
+      // A promotion elsewhere while this gate ran re-proposes the candidate on the new live version.
+      const waiting = s.h.store.proposals.get(id)!.status === 'awaiting_approval';
+      s.afterGate = s.autonomy === 'auto' && waiting ? 'promote' : 'next';
+    } else if (issue.surface === 'model') {
+      s.afterGate = canRetry && issueCasesStillFail(s.h, s.gateRun) ? 'rediagnose' : 'next';
     } else {
-      s.afterGate = s.attempts < MAX_ATTEMPTS && issue.surface !== 'model' && needsProposal(s.h, issue.id) ? 'retry' : 'next';
+      s.afterGate = canRetry ? 'retry' : 'next';
     }
     const decision = s.gateRun.decision;
     if (s.afterGate === 'next') nextIssue(s);
@@ -93,7 +107,7 @@ export const loopGraph = new Graph<LoopState>('improvement_loop', 'judge')
     ],
     (s) => {
       if (s.autonomy === 'manual') return END;
-      const filed = s.h.store.issues.list().some((i) => i.traceIds.includes(s.traceId));
+      const filed = failureFiled(s.h, s.traceId);
       const crashed = s.verdict!.checks.some((c) => c.checkId === 'run_error');
       if (!s.verdict!.passed && !filed && !crashed) return 'diagnose';
       return s.pending.length ? 'propose' : END;
@@ -113,9 +127,10 @@ export const loopGraph = new Graph<LoopState>('improvement_loop', 'judge')
     [
       { to: 'promote', label: 'accepted, auto' },
       { to: 'propose', label: 'rejected and retrying, or next issue' },
+      { to: 'diagnose', label: 'stronger model rejected, diagnose again' },
       { to: END, label: 'awaiting approval, or out of retries' },
     ],
-    (s) => (s.afterGate === 'promote' ? 'promote' : s.afterGate === 'retry' || s.pending.length ? 'propose' : END),
+    (s) => (s.afterGate === 'promote' ? 'promote' : s.afterGate === 'rediagnose' ? 'diagnose' : s.afterGate === 'retry' || s.pending.length ? 'propose' : END),
   )
   .branch(
     'promote',

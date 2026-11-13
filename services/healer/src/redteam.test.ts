@@ -53,6 +53,7 @@ test('an inconsistent probe: code finds the difference, policy names the wrong s
       { same_substance: false, differences: ['One reply refunds $24.00, the other declines.'], likely_wrong: 'unclear', why: 'Nothing in the records shows the window.' },
       {
         reasoning: 'The agent did not know the refund window.',
+        covering_quote: null,
         attach_to: null,
         new_issue: { title: 'Refunds issued after the 30-day window', summary: 'Refunds only within 30 days of delivery.', cause: 'knowledge', scope: 'shop' },
         eval_case: { title: 'Decline a late refund', checks: [{ kind: 'end_state', label: 'No refund', params: { orderId: O.outsideRefundWindow, refund: { none: true } } }] },

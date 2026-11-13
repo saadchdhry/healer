@@ -63,19 +63,20 @@ export function reusableRun(h: Healer, versionId: number): { prior: EvalRun | nu
   return { prior, kept, missing: enabled.filter((c) => !covered.has(c.id)) };
 }
 
-// Runs the suite over a version. Reuses a run that already covers every enabled case, otherwise runs only the
-// missing cases and merges them with the earlier results into a new run.
+// Runs the suite over a version. The gate reuses a run that already covers every enabled case, otherwise runs only the
+// missing cases and merges them with the earlier results into a new run. A run asked for by hand (`fresh`) runs every case.
 export async function runSuite(
   h: Healer,
   versionId: number,
   onProgress?: (done: number, total: number) => void,
   onRun?: (run: EvalRun) => void,
+  { fresh = false }: { fresh?: boolean } = {},
 ): Promise<EvalRun> {
   const { store } = h;
   const epoch = h.epoch;
   const version = store.versions.get(versionId);
   if (!version) throw new Error(`Unknown version ${versionId}`);
-  const { prior, kept, missing } = reusableRun(h, versionId);
+  const { prior, kept, missing } = fresh ? { prior: null, kept: [], missing: store.evalCases.list().filter((c) => c.enabled) } : reusableRun(h, versionId);
   if (prior && !missing.length) {
     onRun?.(prior);
     return prior;
@@ -145,6 +146,7 @@ export function startEvalJob(h: Healer, versionId: number): Job {
         versionId,
         (done, total) => job.progress(done, total),
         (r) => job.setRef(r.id),
+        { fresh: true },
       );
       h.activity('gate', `Eval suite on version ${versionId}: ${Math.round(run.passRate * 100)}% of ${run.results.length} cases pass`, { kind: 'evalRun', id: run.id, label: `v${versionId}` });
     }),

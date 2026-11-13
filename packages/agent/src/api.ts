@@ -167,6 +167,8 @@ export interface HealerApi {
   // A change written by hand in the console.
   'POST /api/healer/proposals': Route<Proposal, { title: string; rationale: string; changes: Change[] }>;
   'POST /api/healer/proposals/:id/gate': Route<Job>;
+  // A new draft with a rejected proposal's changes, built on the live version.
+  'POST /api/healer/proposals/:id/again': Route<Proposal>;
   // Promotes the candidate and deploys it to the shop.
   'POST /api/healer/proposals/:id/approve': Route<AgentVersion>;
   'POST /api/healer/proposals/:id/discard': Route<Proposal>;

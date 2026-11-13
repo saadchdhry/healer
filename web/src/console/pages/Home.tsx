@@ -65,7 +65,12 @@ function LivePanel() {
           <span className={`hc-dot ${overview.shopConnected ? 'ok' : 'bad'}`} />
           {overview.shopConnected ? 'Connected, receiving traces' : 'Not reachable. Start the shop service.'}
         </dd>
+        <dt>Shop date</dt>
+        <dd className="mono">{overview.shopToday ?? 'not known yet'}</dd>
       </dl>
+      <p className="hc-sub" style={{ margin: '8px 0 0', fontSize: 13 }}>
+        The shop runs on a fixed date, so order ages and refund windows never change while you explore. Times in the console are your own clock.
+      </p>
     </div>
   );
 }
@@ -199,7 +204,7 @@ function ActivityPanel() {
               <time dateTime={a.at} title={ago(a.at)}>
                 {time(a.at).slice(0, 5)}
               </time>
-              <span className="stage">{humanize(a.stage)}</span>
+              <span className="stage">{a.stage ? humanize(a.stage) : 'Settings'}</span>
               <span>
                 {a.text}
                 {a.ref && (

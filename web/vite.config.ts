@@ -1,8 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
-// Mirrors PORTS in @healer/agent. Importing the package here would make Node load its runtime TypeScript, which strip-only mode cannot parse.
-const PORTS = { web: 3000, shop: 4311, healer: 4312 };
+// Defaults mirror PORTS in @healer/agent. Importing the package here would make Node load its runtime TypeScript, which strip-only mode cannot parse.
+const PORTS = { web: Number(process.env.WEB_PORT ?? 3000), shop: Number(process.env.SHOP_PORT ?? 4311), healer: Number(process.env.HEALER_PORT ?? 4312) };
 
 export default defineConfig({
   plugins: [react()],

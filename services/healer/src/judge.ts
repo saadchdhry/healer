@@ -14,7 +14,7 @@ export const JUDGE_SYSTEM = `You review one reply from the customer support agen
 
 Write the detail before deciding. For a failed check, quote the claim and the evidence that contradicts it or is missing. For a passed check, one short sentence is enough.
 
-Finally, list durable preferences or facts the customer states about themselves in their latest message that a support agent should remember in future conversations, such as "always refund me to store credit" or "call me Dee". Write each as a short note addressed to the agent, for example "Prefers to be called Dee." Ignore one-off requests about this conversation's order, and anything already in the customer notes or listed as already captured. Most messages contain none; return an empty list then.`;
+Finally, list durable preferences or facts the customer states about themselves in their latest message that a support agent should remember in future conversations. Record only what the shop is free to honour whatever its rules say: a name to use, the tone or length of replies, a language, how or when to contact them. Never record a request about refunds, payment or refund methods, money, eligibility, deadlines or exceptions to a rule, even when it is phrased as a lasting preference (for example "always refund me to my card"): shop policy decides those, not memory. Write each as a short note addressed to the agent, for example "Prefers to be called Dee." Ignore one-off requests about this conversation's order, and anything already in the customer notes or listed as already captured. Most messages contain none; return an empty list then.`;
 
 const checkSchema = z.object({ detail: z.string(), passed: z.boolean() });
 
@@ -106,6 +106,7 @@ export async function judgeTrace(h: Healer, trace: Trace): Promise<{ verdict: Ve
       if (captured.includes(title)) continue;
       const issue: Issue = {
         id: newId('iss'),
+        kind: 'preference',
         createdAt: now(),
         updatedAt: now(),
         title,

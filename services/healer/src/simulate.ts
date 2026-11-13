@@ -171,7 +171,11 @@ function pickConversation(env: EnvSnapshot, rnd: <T>(xs: T[]) => T): Persona & {
 async function converse(h: Healer, env: EnvSnapshot): Promise<{ customer: Customer; intent: string; turns: number }> {
   const rnd = <T>(xs: T[]): T => xs[Math.floor(Math.random() * xs.length)]!;
   const { customer, order, want, intent, voice } = pickConversation(env, rnd);
-  const brief = `${orderFacts(env, customer, order)}\n\nWhat you want: ${want}\n\nVoice: ${voice}.`;
+  const notes = h.store.liveVersion()?.context.filter((n) => n.scope.kind === 'customer' && n.scope.customerId === customer.id) ?? [];
+  const known = notes.length
+    ? `\n\nWhat the shop has been told about you before. It is true, so stay consistent with it and do not contradict it:\n${notes.map((n) => `- ${n.text}`).join('\n')}`
+    : '';
+  const brief = `${orderFacts(env, customer, order)}${known}\n\nWhat you want: ${want}\n\nVoice: ${voice}.`;
   const opening = await simulatorJson(h, `${brief}\n\nWrite your opening message.`, openingSchema);
   let message = opening.message;
   let threadId: string | undefined;

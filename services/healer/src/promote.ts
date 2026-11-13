@@ -1,5 +1,6 @@
-import type { AgentVersion, Tier } from '@healer/agent';
+import type { AgentVersion, Proposal, Tier } from '@healer/agent';
 import { now, type Healer } from './console.ts';
+import { reproposeOnLive } from './gate.ts';
 
 // Makes `version` live: deploys it to the shop first, then records it, so the registry never claims a version the shop is not running.
 async function goLive(h: Healer, version: AgentVersion): Promise<AgentVersion> {
@@ -25,6 +26,8 @@ export async function approve(h: Healer, proposalId: string): Promise<AgentVersi
   if (proposal.issueId) store.issues.put({ ...store.issues.get(proposal.issueId)!, status: 'fixed', updatedAt: now() });
   h.activity('promote', `Version ${live.id} is live in the shop: ${proposal.title}`, { kind: 'version', id: String(live.id), label: `v${live.id}` });
   h.changed('version', 'proposal', 'issue');
+  const waiting = (p: Proposal) => p.baseVersionId === proposal.baseVersionId && (p.status === 'draft' || p.status === 'awaiting_approval');
+  reproposeOnLive(h, store.proposals.list().filter(waiting));
   return live;
 }
 

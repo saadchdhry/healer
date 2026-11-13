@@ -9,6 +9,20 @@
         "dev"
       ],
       "port": 3000
+    },
+    {
+      "name": "healer-verify",
+      "runtimeExecutable": "env",
+      "runtimeArgs": [
+        "WEB_PORT=3210",
+        "SHOP_PORT=4421",
+        "HEALER_PORT=4422",
+        "HEALER_DATA_DIR=data/verify",
+        "npm",
+        "run",
+        "dev"
+      ],
+      "port": 3210
     }
   ]
 }

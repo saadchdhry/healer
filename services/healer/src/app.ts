@@ -24,7 +24,7 @@ import { lineage } from './lineage.ts';
 import { loopGraphShape, runLoop } from './loop.ts';
 import { POLICY_RULES } from './policy.ts';
 import { approve, rollback, setTier } from './promote.ts';
-import { ChangeError, changeSchema, createProposal, isOpenProposal, startProposeJob } from './propose.ts';
+import { ChangeError, changeSchema, createProposal, discardProposal, isOpenProposal, proposeAgain, startProposeJob } from './propose.ts';
 import { startRedTeamJob } from './redteam.ts';
 import { proposeRouter, startDatasetJob, trainAndStore } from './routerTraining.ts';
 import { SEEDED_CASES, startFireJob } from './seeds.ts';
@@ -115,7 +115,10 @@ export function createHealerApp(options: HealerOptions) {
       if (!connected) h.runningTraces.clear();
       h.scheduleOverview();
     },
-    onOpen: registerShopVersion,
+    onOpen: async () => {
+      h.shopToday = (await options.shop.env()).today;
+      await registerShopVersion();
+    },
     onError: (err) => console.error('[healer] shop link:', err instanceof Error ? err.message : err),
     ...(options.reconnectMinMs ? { minDelayMs: options.reconnectMinMs } : {}),
   });
@@ -183,7 +186,7 @@ export function createHealerApp(options: HealerOptions) {
     const patch = await body(c, z.object({ autonomy: z.enum(['manual', 'approve', 'auto']).optional(), trialsPerCase: z.number().int().min(1).max(9).optional() }));
     const settings = { ...store.settings(), ...patch };
     store.setSettings(settings);
-    h.activity('propose', `Settings: autonomy ${settings.autonomy}, ${settings.trialsPerCase} trials per eval case`);
+    h.activity(null, `Autonomy ${settings.autonomy}, ${settings.trialsPerCase} trials per eval case`);
     h.scheduleOverview();
     return c.json<Res<'PUT /api/healer/settings'>>(settings);
   });
@@ -329,6 +332,22 @@ export function createHealerApp(options: HealerOptions) {
     return c.json<Res<'POST /api/healer/proposals/:id/gate'>>(startGateJob(h, proposal.id));
   });
 
+  app.post('/api/healer/proposals/:id/again', (c) => {
+    const proposal = store.proposals.get(c.req.param('id'));
+    if (!proposal) throw notFound('Proposal');
+    if (proposal.status !== 'rejected') throw conflict(`Proposal ${proposal.id} is ${proposal.status}; only a rejected proposal can be proposed again`);
+    const issue = proposal.issueId ? store.issues.get(proposal.issueId) : null;
+    if (issue && (issue.status === 'fixed' || issue.status === 'dismissed')) throw conflict(`Its issue is already ${issue.status}`);
+    if (issue?.proposalIds.some((id) => isOpenProposal(store.proposals.get(id)!))) throw conflict('Its issue already has an open proposal');
+    requireLive();
+    try {
+      return c.json<Res<'POST /api/healer/proposals/:id/again'>>(proposeAgain(h, proposal, 'Proposed again'));
+    } catch (err) {
+      if (err instanceof ChangeError) throw conflict(err.message);
+      throw err;
+    }
+  });
+
   app.post('/api/healer/proposals/:id/approve', async (c) => {
     const proposal = store.proposals.get(c.req.param('id'));
     if (!proposal) throw notFound('Proposal');
@@ -342,15 +361,7 @@ export function createHealerApp(options: HealerOptions) {
     const proposal = store.proposals.get(c.req.param('id'));
     if (!proposal) throw notFound('Proposal');
     if (!isOpenProposal(proposal) || proposal.status === 'gating') throw conflict(`Proposal ${proposal.id} is ${proposal.status} and cannot be discarded`);
-    const discarded = store.proposals.put({ ...proposal, status: 'discarded' });
-    store.versions.put({ ...store.versions.get(proposal.candidateVersionId)!, status: 'rejected' });
-    const issue = proposal.issueId ? store.issues.get(proposal.issueId) : null;
-    if (issue && issue.status === 'proposed' && !issue.proposalIds.some((id) => isOpenProposal(store.proposals.get(id)!))) {
-      store.issues.put({ ...issue, status: 'open', updatedAt: now() });
-    }
-    h.activity('propose', `Discarded proposal: ${proposal.title}`, { kind: 'proposal', id: proposal.id, label: proposal.title });
-    h.changed('proposal', 'version', 'issue');
-    return c.json<Res<'POST /api/healer/proposals/:id/discard'>>(discarded);
+    return c.json<Res<'POST /api/healer/proposals/:id/discard'>>(discardProposal(h, proposal));
   });
 
   // ── Gate ──

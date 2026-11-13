@@ -1,7 +1,7 @@
-import { predictRoute, type CaseResult, type EvalRun, type GateRun, type Job, type Tier } from '@healer/agent';
+import { predictRoute, type CaseResult, type EvalRun, type GateRun, type Job, type Proposal, type Tier } from '@healer/agent';
 import { newId, now, type Healer } from './console.ts';
 import { runSuite } from './evalRunner.ts';
-import { isOpenProposal } from './propose.ts';
+import { ChangeError, discardProposal, isOpenProposal, proposeAgain } from './propose.ts';
 
 export interface GateDecision {
   decision: 'accept' | 'reject';
@@ -167,7 +167,38 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
   }
   h.activity('gate', `${accepted ? 'Accepted' : 'Rejected'} "${proposal.title}": ${result.reasons[0]}`, { kind: 'gateRun', id: gateRun.id, label: result.decision });
   h.changed('gateRun', 'proposal', 'version', 'issue', 'evalRun');
+  // A version was promoted while this gate ran, so the acceptance is against a version that is no longer live.
+  if (accepted && store.liveVersion()!.id !== proposal.baseVersionId) reproposeOnLive(h, [store.proposals.get(proposalId)!]);
   return gateRun;
+}
+
+// Whether every enabled eval case of the gated proposal's issue failed on the candidate.
+export function issueCasesStillFail(h: Healer, gateRun: GateRun): boolean {
+  const { store } = h;
+  const issueId = store.proposals.get(gateRun.proposalId)?.issueId;
+  const run = gateRun.candidateRunId ? store.evalRuns.get(gateRun.candidateRunId) : null;
+  if (!issueId || !run) return false;
+  const caseIds = store.issues.get(issueId)!.evalCaseIds.filter((id) => store.evalCases.get(id)?.enabled);
+  const results = run.results.filter((r) => caseIds.includes(r.caseId));
+  return results.length > 0 && results.every((r) => !r.passed);
+}
+
+// Rebuilds waiting proposals on the live version after a promotion: each becomes a new draft with the same changes,
+// and the stale one is discarded. Outside manual mode the new drafts are gated again through the queue. Each stale
+// proposal is handled once, and a re-gated draft waits for approval, so a promotion never sets off another.
+export function reproposeOnLive(h: Healer, stale: Proposal[]): void {
+  const live = h.store.liveVersion()!;
+  const gate = h.store.settings().autonomy !== 'manual';
+  for (const p of stale) {
+    try {
+      const next = proposeAgain(h, p, `Proposed again on version ${live.id}, which replaced version ${p.baseVersionId}`);
+      discardProposal(h, p, `: replaced by ${next.id} on version ${live.id}`);
+      if (gate) startGateJob(h, next.id);
+    } catch (err) {
+      if (!(err instanceof ChangeError)) throw err;
+      discardProposal(h, p, `: it no longer applies to version ${live.id}. ${err.message}`);
+    }
+  }
 }
 
 export function startGateJob(h: Healer, proposalId: string): Job {

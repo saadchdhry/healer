@@ -161,12 +161,13 @@ export function ProposalPage() {
   const { list: customers } = useCustomers();
   const { jobs, trackJob } = useConsole();
   const act = useAction();
+  const navigate = useNavigate();
 
   return (
     <Q q={q} what="the proposal">
       {({ proposal: p, base, candidate, gateRun, lineage }) => {
         const job = jobs.find((j) => j.kind === 'gate' && j.refId === p.id && (j.status === 'running' || p.status === 'gating'));
-        const canGate = p.status === 'draft' || p.status === 'rejected';
+        const canGate = p.status === 'draft';
         const canApprove = p.status === 'awaiting_approval';
         const canDiscard = p.status !== 'promoted' && p.status !== 'discarded';
         return (
@@ -227,6 +228,16 @@ export function ProposalPage() {
                   <button type="button" className="hc-btn" disabled={act.busy || !canGate} onClick={() => act.run(async () => trackJob(await call('POST /api/healer/proposals/:id/gate', { params: { id: p.id } })))}>
                     Run the gate
                   </button>
+                  {p.status === 'rejected' && (
+                    <button
+                      type="button"
+                      className="hc-btn"
+                      disabled={act.busy}
+                      onClick={() => act.run(async () => navigate(`/console/proposals/${(await call('POST /api/healer/proposals/:id/again', { params: { id: p.id } })).id}`))}
+                    >
+                      Propose again
+                    </button>
+                  )}
                   <button type="button" className="hc-btn primary" disabled={act.busy || !canApprove} onClick={() => act.run(async () => { await call('POST /api/healer/proposals/:id/approve', { params: { id: p.id } }); q.reload(); })}>
                     Approve and deploy
                   </button>

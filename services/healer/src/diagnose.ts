@@ -1,22 +1,24 @@
 import { z } from 'zod';
-import { LlmError, LOOP_MODEL_ID, type Cause, type EvalCase, type EvalCheckSpec, type Issue, type Job, type Surface, type Verdict } from '@healer/agent';
+import { LlmError, LOOP_MODEL_ID, type AgentVersion, type Cause, type GateRun, type EvalCase, type EvalCheckSpec, type Issue, type Job, type Surface, type Verdict } from '@healer/agent';
 import { newId, now, type Healer } from './console.ts';
 import * as describe from './describe.ts';
 import { CHECK_PARAMS } from './evals.ts';
 
 export const SURFACE_FOR_CAUSE: Record<Cause, Surface> = { knowledge: 'context', process: 'harness', capability: 'model' };
 
+const CAUSES = `Causes. Pick exactly one:
+- knowledge: the agent lacked a fact about the shop's rules or about this customer. Nothing in its context notes or system prompt states the rule it broke. Fixed in the context: a shop-scope note for a shop rule, a customer-scope note for something true of this customer only.
+- process: the agent had what it needed but worked in the wrong order, skipped a check (for example acting on an order without looking it up first), or needs a rule enforced in code. Fixed in the harness: the system prompt, a tool description, or a guard.
+- capability: the context already states the needed rule and the harness the needed procedure, and the agent still got the reasoning or arithmetic wrong. Fixed by a stronger model. Choose it only when you can copy, word for word, the note or instruction in the live version that already states the rule the failed check names, and give those words as covering_quote. If no note or instruction states that rule, the cause is knowledge, however hard the request looks.
+Check the live version before choosing: if its notes already state the broken rule, the cause is not knowledge.
+
+Scope is "customer" only when the lesson concerns this one customer. Every shop rule has scope "shop".`;
+
 export const DIAGNOSE_SYSTEM = `You diagnose failures of the customer support agent of Pocket Meadow, an online shop selling home and garden goods. You get one failed conversation with the checks it failed, the agent version now live, and the issues already open. Decide why the agent failed, file the failure under an issue, and write a test that catches this failure if it ever happens again.
 
 The failed checks are your evidence. A policy check's detail states the shop rule that was broken, with the real numbers; treat it as true.
 
-Causes. Pick exactly one:
-- knowledge: the agent lacked a fact about the shop's rules or about this customer. Nothing in its context notes or system prompt states the rule it broke. Fixed in the context: a shop-scope note for a shop rule, a customer-scope note for something true of this customer only.
-- process: the agent had what it needed but worked in the wrong order, skipped a check (for example acting on an order without looking it up first), or needs a rule enforced in code. Fixed in the harness: the system prompt, a tool description, or a guard.
-- capability: the context already states the needed rule and the harness the needed procedure, and the agent still got the reasoning or arithmetic wrong. Fixed by a stronger model.
-Check the live version before choosing: if its notes already state the broken rule, the cause is not knowledge.
-
-Scope is "customer" only when the lesson concerns this one customer. Every shop rule has scope "shop".
+${CAUSES}
 
 Attach the failure to an open issue when it is the same underlying problem with the same fix: the same broken rule, cause and scope. Otherwise open a new issue. Give a new issue a short, specific title naming the rule or behaviour (for example "Refunds issued after the 30-day window"), and a summary of the class of failure in two or three sentences, including the rule as the evidence states it.
 
@@ -34,8 +36,14 @@ const modelCheck = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('exact_match'), label: z.string(), params: CHECK_PARAMS.exact_match }),
 ]);
 
+const coveringQuote = z
+  .string()
+  .nullable()
+  .describe("Only for cause capability: the exact words, copied from the live version's context notes, system prompt or tool descriptions, that already state the rule the failed check names. Null for any other cause.");
+
 export const diagnoseSchema = z.object({
   reasoning: z.string().describe('Why the agent failed, and why this cause'),
+  covering_quote: coveringQuote,
   attach_to: z.string().nullable().describe('The id of the open issue this failure belongs to, or null to open a new issue'),
   new_issue: z
     .object({ title: z.string(), summary: z.string(), cause: z.enum(['knowledge', 'process', 'capability']), scope: z.enum(['shop', 'customer']) })
@@ -44,9 +52,36 @@ export const diagnoseSchema = z.object({
   eval_case: z.object({ title: z.string(), checks: z.array(modelCheck) }),
 });
 
-// Failed verdicts whose trace is in no issue yet. Runs that crashed are plumbing, not agent behaviour, so they are left out.
+const squash = (t: string) => t.replace(/\s+/g, ' ').trim();
+
+// Whether `quote` really appears in the version's context or harness text. A capability diagnosis must point at the rule the
+// agent already had; without it the gap is missing knowledge, and a stronger model would not fix it.
+export function quoteInVersion(v: AgentVersion, quote: string | null): boolean {
+  const q = squash((quote ?? '').replace(/^["'“”]+|["'“”]+$/g, ''));
+  if (!q) return false;
+  const text = squash([...v.context.map((n) => n.text), v.harness.systemPrompt, ...v.harness.tools.map((t) => t.description)].join('\n'));
+  return text.includes(q);
+}
+
+// Falls back from capability to knowledge (a shop note) when the covering rule cannot be found in the live version.
+function checkedCause(h: Healer, live: AgentVersion, cause: Cause, scope: 'shop' | 'customer', quote: string | null, title: string): { cause: Cause; scope: 'shop' | 'customer' } {
+  if (cause !== 'capability' || quoteInVersion(live, quote)) return { cause, scope };
+  h.activity(
+    'diagnose',
+    `Diagnosis called "${title}" a capability gap but ${quote ? 'its quote does not appear' : 'quoted no note or instruction'} in version ${live.id}, so it is filed as a knowledge gap for the whole shop`,
+  );
+  return { cause: 'knowledge', scope: 'shop' };
+}
+
+// Whether a trace's failure is already filed. A preference the judge filed from the same trace does not count:
+// the failure still needs its own diagnosis and eval case.
+export function failureFiled(h: Healer, traceId: string): boolean {
+  return h.store.issues.list().some((i) => i.kind !== 'preference' && i.traceIds.includes(traceId));
+}
+
+// Failed verdicts whose failure is in no issue yet. Runs that crashed are plumbing, not agent behaviour, so they are left out.
 export function undiagnosed(h: Healer): Verdict[] {
-  const filed = new Set(h.store.issues.list().flatMap((i) => i.traceIds));
+  const filed = new Set(h.store.issues.list().filter((i) => i.kind !== 'preference').flatMap((i) => i.traceIds));
   return h.store
     .verdicts({ passed: false })
     .reverse()
@@ -92,9 +127,11 @@ export async function diagnoseTrace(h: Healer, traceId: string, origin: EvalCase
     issue = found;
   } else {
     if (!out.new_issue) throw new Error('Diagnosis opened no issue and attached to none');
-    const { title, summary, cause, scope } = out.new_issue;
+    const { title, summary } = out.new_issue;
+    const { cause, scope } = checkedCause(h, live, out.new_issue.cause, out.new_issue.scope, out.covering_quote, title);
     issue = {
       id: newId('iss'),
+      kind: 'failure',
       createdAt: now(),
       updatedAt: now(),
       title,
@@ -152,4 +189,70 @@ export function startDiagnoseJob(h: Healer): Job {
       }
     }),
   );
+}
+
+export const REDIAGNOSE_SYSTEM = `You diagnose failures of the customer support agent of Pocket Meadow, an online shop selling home and garden goods. An issue was diagnosed as a capability gap, so the loop proposed moving the agent to a stronger model. The eval gate rejected that change because the issue's own eval case still fails on the stronger model. That is evidence against a capability gap. You get the issue, its latest failed conversation with the checks it failed, the gate's reasons, and the agent version now live. Decide the cause again.
+
+A policy check's detail states the shop rule that was broken, with the real numbers; treat it as true.
+
+${CAUSES}`;
+
+export const rediagnoseSchema = z.object({
+  reasoning: z.string().describe('Why the agent failed, what the rejected stronger model shows, and why this cause'),
+  cause: z.enum(['knowledge', 'process', 'capability']),
+  scope: z.enum(['shop', 'customer']),
+  covering_quote: coveringQuote,
+});
+
+// Sends an issue back through diagnosis after the gate rejected a stronger model for it, and files it under whatever cause
+// diagnosis now finds, so the loop can try the cheaper surface the evidence points at.
+export async function rediagnoseIssue(h: Healer, issueId: string, gateRun: GateRun): Promise<Issue> {
+  const { store } = h;
+  const issue = store.issues.get(issueId)!;
+  const traceId = issue.traceIds.at(-1)!;
+  const trace = store.trace(traceId)!;
+  const live = store.liveVersion()!;
+  const message = [
+    '<issue>',
+    describe.issue(issue),
+    '</issue>',
+    '',
+    '<failure>',
+    describe.failure(trace, store.verdictForTrace(traceId)?.checks ?? []),
+    '</failure>',
+    '',
+    `<gate_rejection version="${gateRun.candidateVersionId}">`,
+    gateRun.reasons.join('\n'),
+    '</gate_rejection>',
+    '',
+    '<live_version>',
+    describe.version(live),
+    '</live_version>',
+  ].join('\n');
+  let result;
+  try {
+    result = await h.llm().json({ role: 'diagnose', model: LOOP_MODEL_ID, effort: 'medium', system: REDIAGNOSE_SYSTEM, messages: [{ role: 'user', content: message }], schema: rediagnoseSchema });
+  } catch (err) {
+    if (err instanceof LlmError) h.recordRun(err.run);
+    throw err;
+  }
+  h.recordRun(result.run);
+  const out = result.value;
+  const { cause, scope } = checkedCause(h, live, out.cause, out.scope, out.covering_quote, issue.title);
+  const updated: Issue = {
+    ...issue,
+    cause,
+    surface: SURFACE_FOR_CAUSE[cause],
+    scope: scope === 'shop' ? { kind: 'shop' } : { kind: 'customer', customerId: trace.customerId },
+    diagnoseRun: result.run,
+    updatedAt: now(),
+  };
+  store.issues.put(updated);
+  h.activity(
+    'diagnose',
+    cause === issue.cause ? `Diagnosed again after the gate rejected a stronger model: still a ${cause} issue, so the loop stops on it` : `Diagnosed again after the gate rejected a stronger model: now a ${cause} issue (${updated.surface})`,
+    { kind: 'issue', id: issue.id, label: issue.title },
+  );
+  h.changed('issue');
+  return updated;
 }

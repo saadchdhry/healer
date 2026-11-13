@@ -116,6 +116,7 @@ export const isOpenProposal = (p: Proposal) => p.status === 'draft' || p.status 
 export function createProposal(
   h: Healer,
   input: { author: Proposal['author']; issueId: string | null; title: string; rationale: string; changes: Change[]; proposeRun: Run | null },
+  verb = input.author === 'loop' ? 'Proposed' : 'Hand-written proposal',
 ): Proposal {
   const { store } = h;
   const base = store.liveVersion()!;
@@ -149,13 +150,38 @@ export function createProposal(
     issue.updatedAt = now();
     store.issues.put(issue);
   }
-  h.activity('propose', `${input.author === 'loop' ? 'Proposed' : 'Hand-written proposal'}: ${proposal.title} (candidate version ${candidate.id})`, {
+  h.activity('propose', `${verb}: ${proposal.title} (candidate version ${candidate.id})`, {
     kind: 'proposal',
     id: proposal.id,
     label: proposal.title,
   });
   h.changed('proposal', 'version', 'issue');
   return proposal;
+}
+
+// A new draft with the same changes, issue and title as `p`, built on the live version. Throws ChangeError when the
+// changes no longer apply there, for example an edit to a note the live version no longer has.
+export function proposeAgain(h: Healer, p: Proposal, verb: string): Proposal {
+  const live = h.store.liveVersion()!;
+  try {
+    return createProposal(h, { author: p.author, issueId: p.issueId, title: p.title, rationale: p.rationale, changes: p.changes, proposeRun: p.proposeRun }, verb);
+  } catch (err) {
+    if (err instanceof ChangeError) throw new ChangeError(`The changes no longer apply to live version ${live.id}: ${err.message.charAt(0).toLowerCase()}${err.message.slice(1)}.`);
+    throw err;
+  }
+}
+
+export function discardProposal(h: Healer, proposal: Proposal, why = ''): Proposal {
+  const { store } = h;
+  const discarded = store.proposals.put({ ...proposal, status: 'discarded' });
+  store.versions.put({ ...store.versions.get(proposal.candidateVersionId)!, status: 'rejected' });
+  const issue = proposal.issueId ? store.issues.get(proposal.issueId) : null;
+  if (issue && issue.status === 'proposed' && !issue.proposalIds.some((id) => isOpenProposal(store.proposals.get(id)!))) {
+    store.issues.put({ ...issue, status: 'open', updatedAt: now() });
+  }
+  h.activity('propose', `Discarded proposal: ${proposal.title}${why}`, { kind: 'proposal', id: proposal.id, label: proposal.title });
+  h.changed('proposal', 'version', 'issue');
+  return discarded;
 }
 
 export const PROPOSE_SYSTEM = `You propose a change to the customer support agent of Pocket Meadow, an online shop selling home and garden goods, to fix one issue found in its conversations. You see the issue, some of the conversations that failed with the checks they failed, and the agent version now live.
@@ -166,6 +192,7 @@ Learn the shop's rules only from the failed checks. State a rule exactly as they
 
 const SURFACE_GUIDE = {
   context: `This issue is fixed in the context: short notes the agent reads in every conversation, under "Shop notes" (scope shop) or "Notes about this customer" (scope customer). A new note gets this issue's scope. One note per rule. Edit an existing note rather than adding one that overlaps it, and remove a note only if it is wrong.`,
+  customer: `A note for one customer records only what the shop is free to honour whatever its rules say: a name to use, tone, language, how or when to contact them. Never write a customer note that asks for, promises or changes anything about refunds, payment or refund methods, money, eligibility, deadlines or exceptions to a rule; shop policy decides those for every customer. Read the notes this customer already has in the live version first. If the new preference contradicts or updates one of them (for example a different name to use), edit that note to what the customer wants now, or remove it, instead of adding a second note: the customer's latest statement wins.`,
   harness: `This issue is fixed in the harness. You can rewrite the system prompt (give the full new text, keeping what still applies), change a tool's description or enable or disable it, or switch on guards enforced in code:
 - requireOrderLookupBeforeWrite: a write tool is refused unless get_order or list_orders returned that order earlier and it belongs to the current customer.
 - blockDuplicateRefund: a second refund on an order is refused.
@@ -247,7 +274,8 @@ export async function proposeForIssue(h: Healer, issueId: string): Promise<Propo
     describe.version(live),
     '</live_version>',
   ].join('\n');
-  const system = `${PROPOSE_SYSTEM}\n\n${SURFACE_GUIDE[issue.surface]}${previousAttempts(h, issue)}`;
+  const guide = issue.surface === 'context' && issue.scope.kind === 'customer' ? `${SURFACE_GUIDE.context}\n\n${SURFACE_GUIDE.customer}` : SURFACE_GUIDE[issue.surface];
+  const system = `${PROPOSE_SYSTEM}\n\n${guide}${previousAttempts(h, issue)}`;
 
   const schema: z.ZodType<ProposalOutput> = issue.surface === 'context' ? proposalOutput(contextChange) : proposalOutput(harnessChange);
   let result;

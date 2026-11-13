@@ -42,6 +42,7 @@ export interface JobHandle {
 // The shared context every stage works through: the store, the shop, the model, and the console's event plumbing.
 export class Healer {
   shopConnected = false;
+  shopToday: string | null = null;
   // Bumped by reset; work started under an older epoch stops at its next check.
   epoch = 0;
   private listeners = new Set<(event: HealerEvent) => void>();
@@ -97,7 +98,7 @@ export class Healer {
     this.overviewTimer.unref();
   }
 
-  activity(stage: LoopStage, text: string, ref: Ref | null = null): void {
+  activity(stage: LoopStage | null, text: string, ref: Ref | null = null): void {
     const entry = this.store.activity.put({ id: newId('act'), at: now(), stage, text, ref });
     this.emit({ type: 'activity', entry });
   }
@@ -218,6 +219,7 @@ export class Healer {
     const latestRun = store.evalRuns.list().filter((r) => r.status === 'done' && r.versionId === live.id).at(-1);
     return {
       shopConnected: this.shopConnected,
+      shopToday: this.shopToday,
       apiKeyPresent: this.hasLlm(),
       liveVersionId: live.id,
       liveModel: live.model,

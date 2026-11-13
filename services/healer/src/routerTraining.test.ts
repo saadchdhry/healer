@@ -143,7 +143,7 @@ test('dataset by repeated replays, honest metrics, routed proposal through the g
 
   // A capability issue whose case the router must send to sonnet.
   const issue: Issue = {
-    id: 'iss_cap', createdAt: '', updatedAt: '', title: 'Late refunds miscounted', summary: '', cause: 'capability', surface: 'model', scope: { kind: 'shop' },
+    id: 'iss_cap', kind: 'failure', createdAt: '', updatedAt: '', title: 'Late refunds miscounted', summary: '', cause: 'capability', surface: 'model', scope: { kind: 'shop' },
     status: 'fixed', traceIds: [], evalCaseIds: ['ev_cap'], proposalIds: [], diagnoseRun: null,
   };
   h.store.issues.put(issue);

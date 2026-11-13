@@ -293,6 +293,8 @@ export type Surface = 'context' | 'harness' | 'model';
 
 export interface Issue {
   id: string;
+  // A preference is filed by the judge for one customer; a failure is filed by diagnosis with an eval case.
+  kind: 'failure' | 'preference';
   createdAt: string;
   updatedAt: string;
   title: string;
@@ -475,6 +477,8 @@ export interface CostByRole {
 
 export interface Overview {
   shopConnected: boolean;
+  // The shop's fixed "today", read from its records; null until the shop has been reached.
+  shopToday: string | null;
   apiKeyPresent: boolean;
   liveVersionId: number;
   liveModel: ModelConfig;
@@ -530,7 +534,8 @@ export interface Lineage {
 export interface ActivityEntry {
   id: string;
   at: string;
-  stage: LoopStage;
+  // Null for entries that belong to no stage, such as a settings change.
+  stage: LoopStage | null;
   text: string;
   ref: Ref | null;
 }

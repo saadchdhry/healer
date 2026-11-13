@@ -514,8 +514,28 @@
 .hc-scroll {
   overflow-x: auto;
 }
+/* A table with message and reply columns fits its panel: those two columns take what is left and clip, so the verdict never needs sideways scrolling. */
 .hc-narrow-clip .clip {
-  max-width: 220px !important;
+  max-width: 0 !important;
+  width: 50%;
+}
+.hc-narrow-clip td:not(.clip) {
+  white-space: nowrap;
+}
+.hc-narrow-clip .id-cell {
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+@media (max-width: 1100px) {
+  .hc-narrow-clip .wide-only {
+    display: none;
+  }
+}
+@media (max-width: 900px) {
+  .hc-narrow-clip .mid-only {
+    display: none;
+  }
 }
 .hc-table .clip {
   max-width: 300px;

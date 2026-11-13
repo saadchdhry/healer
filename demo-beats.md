@@ -24,7 +24,7 @@ The diagram above is the framework this walkthrough teaches. Keep it in mind: by
 4. In the **Autonomy** panel on the same page, press **Manual**. Reset puts autonomy back on **Approve**, which makes the loop run (and spend) on its own after every conversation. Manual lets you drive each step by hand, which is how the first half of this walkthrough works.
 5. Open **Gate** in the left sidebar. Under **Trials per eval case**, type `2` and press **Save**. Each test case is run this many times because model output varies between runs. Two trials halves the spend of the default three and was enough for every beat below; the trade-off is that a failure that happens one time in five will usually slip past unseen (Beat 7 comes back to this).
 
-The shop runs on a fixed clock: its "today" is 11 November 2026, shown on every trace as "Shop state on 2026-11-11". Order dates and the agent's idea of "today" follow that clock, not yours.
+The shop runs on a fixed clock: its "today" is 11 November 2026, shown on every trace as "Shop state on 2026-11-11" and on the console home page as **Shop date** in the **Live in the shop** panel. Order dates and the agent's idea of "today" follow that clock, not yours.
 
 ---
 
@@ -174,7 +174,7 @@ The verified gate: **Accepted**, pass rate "86% to 100%", cost per task $0.0005 
 `services/healer/src/gate.ts` ran the suite twice through `services/healer/src/evalRunner.ts`, once per version, two trials per case. A case passes when most of its trials pass. The decision rule is simple and strict: nothing regressed, the pass rate did not drop, and the issue's own case now passes.
 
 **If it goes differently**
-If the gate rejects the note because a check is too strict (brief section 7 notes diagnosis sometimes writes one), open the eval case, press **Edit case**, loosen or remove the check, and press **Save**. Then go back to the issue and press **Propose a fix** again: a rejected proposal cannot be gated a second time, even though its **Run the gate** button stays enabled.
+If the gate rejects the note because a check is too strict (brief section 7 notes diagnosis sometimes writes one), open the eval case, press **Edit case**, loosen or remove the check, and press **Save**. Then go back to the rejected proposal and press **Propose again**. It opens a new draft with the same changes, built on the live version; press **Run the gate** on that draft. **Run the gate** is greyed out on the rejected proposal itself, because only a draft can be gated.
 
 ---
 
@@ -291,7 +291,7 @@ The eval suite is the specification. Every case is a realistic input plus checks
 On the verified run the grid had seven rows and columns v0 to v4. The six "Written up front" cases had ticks everywhere except "Clean refund inside the window" under v2, the rejected stop-all-refunds version. The shears case, tagged "From a failure", had a cross under v0 and ticks from v1 on: the failure you fixed, frozen as a test.
 
 **What just happened**
-Every gate run added an eval run for its base and candidate versions, which filled the grid. The case kinds live in `services/healer/src/evals.ts` and the starting cases in `services/healer/src/golden.ts`. **Run the suite on this version** reuses an earlier run when one already covers every enabled case, so on a version that has been gated it finishes instantly and adds nothing. You will use it on a fresh version in Beat 16.
+Every gate run added an eval run for its base and candidate versions, which filled the grid. The case kinds live in `services/healer/src/evals.ts` and the starting cases in `services/healer/src/golden.ts`. The gate reuses an earlier run of the same version when one already covers every enabled case, which saves money. **Run the suite on this version** never reuses: every press runs each case again and adds a new row to **Eval runs**, at a few cents a time. You will use it in Beat 16.
 
 ---
 
@@ -313,7 +313,7 @@ In Approve mode the verified Activity feed read, in order: "Failed (Cancel only 
 Both runs were the same graph in `services/healer/src/loop.ts`, which the console map draws. The only difference is the branch after the gate: in Approve it stops, in Automatic it goes on to promote. If the gate rejects a proposal, the loop retries up to twice with a new proposal. The seeded cases are known-tricky customers kept in `services/healer/src/seeds.ts`; they behave as described only on fresh shop data.
 
 **If it goes differently**
-If the agent happens to get a seeded case right, the verdict passes and the loop stops after the judge. Fire it again, or pick another case such as **Return a final-sale item**. Avoid **New address for a shipped order** in Automatic mode: on the verified run the customer's message also contained a preference, and the loop saved the shop's address rule as a note for that one customer only (see "Known limits" at the end). If two proposals are waiting in **Approval queue**, approving one makes the other unapprovable ("was gated against version N, which is no longer live"); discard it.
+If the agent happens to get a seeded case right, the verdict passes and the loop stops after the judge. Fire it again, or pick another case such as **Return a final-sale item** or **New address for a shipped order**. If one message both breaks a rule and states a preference, the failure is diagnosed first, as a shop-wide issue with its own eval case, and the preference becomes a separate issue for that customer afterwards. If two proposals are waiting in **Approval queue**, approving one replaces the live version the other was gated against. The other is not stranded: **Activity** shows "Proposed again on version N, which replaced version M", followed by "Discarded proposal" for the old copy, and in **Approve** or **Automatic** the new draft is gated again on its own and comes back to **Approval queue** if it passes. If its changes no longer fit the new live version (for example it edits a note that is gone), it is discarded and the line says why.
 
 ---
 
@@ -328,10 +328,10 @@ One person chatting makes a handful of traces. The loop needs more: realistic tr
 3. Open **Diagnose** and press **Run diagnosis on unclustered failures**. Read the **Traces** column of the issues table.
 
 **What you should see**
-The feed logged lines such as "Simulated customer 1 of 6: Marcus Bell, cancellation, 1 message" followed by each message and its verdict. On the verified run five of six passed. The one failure was revealing: a simulated Ava wrote "My name is Ava Thompson, not Annie", and the judge filed "Wants to be called Ava, not Annie. This replaces the earlier note". Running diagnosis then picked up the Priya trace from Beat 11 and filed "Agent invents how escalated requests will be followed up" as a **Process gap** on the **Harness**. Each issue had one trace.
+The feed logged lines such as "Simulated customer 1 of 6: Marcus Bell, cancellation, 1 message" followed by each message and its verdict. On the verified run five of six passed. Simulated customers are shown the notes the shop already holds about them, so a simulated Ava goes by Annie rather than contradicting her note. (On the run that verified this, a customer whose note said to call him Dee was simulated twice, and both messages called him Dee.) Running diagnosis then picked up the Priya trace from Beat 11 and filed "Agent invents how escalated requests will be followed up" as a **Process gap** on the **Harness**. Each issue had one trace.
 
 **What just happened**
-`services/healer/src/simulate.ts` gave each simulated customer an order, an intent and a voice. Diagnosis clusters by attaching a new failure to an open issue with the same root cause, so the **Traces** count only grows when the same failure recurs; with six customers on an already-improved agent it usually stays at one. The Ava contradiction is a live example of *memory rot*: notes pile up and contradict each other, and choosing what to remember is the hardest part of the context loop.
+`services/healer/src/simulate.ts` gave each simulated customer an order, an intent, a voice and the customer's notes from the live version. Diagnosis clusters by attaching a new failure to an open issue with the same root cause, so the **Traces** count only grows when the same failure recurs; with six customers on an already-improved agent it usually stays at one. *Memory rot* is when notes pile up and contradict each other, and choosing what to remember is the hardest part of the context loop. Two guards against it are built in: when a customer really does change a preference, the proposer edits or removes their old note instead of adding a second one (when this was checked, "please just call me Marcus again" from a customer with a note saying to call him Dee produced an edit of that note), and the judge only records what the shop is free to honour whatever its rules say, such as a name, tone, language or how to be contacted, never a wish about refunds, money or exceptions.
 
 **If it goes differently**
 You will see different customers and different failures. If nothing fails, the improved agent handled them all; that is also a result.
@@ -371,7 +371,7 @@ The third surface is the model itself. Claude cannot be retrained inside this de
 **Live model config** read "Live version v9. Deployed without the gate, so no eval run vouches for it." The suite on Sonnet: 100% of 10 cases at $0.012 per task. The previous Haiku version: 100% at $0.0007 per task. Same score, about 18 times the cost. After the rollback, a new version "Rollback to a copy of version 7" was live, on Haiku 5.5, also marked "No, deployed without the gate". Your version numbers and case count will differ.
 
 **What just happened**
-`setTier` in `services/healer/src/promote.ts` made a new version that differs only in its model. With the shop's rules already in context, the small model matches the large one on nearly everything. Brief section 7 measured the gap: the small model erred only on the hardest request found (three orders in one message), about once in 17 tries. A suite of a few cases at two trials each cannot see an error that rare, so if you judge model changes, raise **Trials per eval case**. A *capability issue* arises when diagnosis finds the agent had the right rule in context and the right instructions and still got the reasoning wrong; the loop then proposes the next tier, and the gate shows pass rate against cost. On an exploratory run the loop did propose "Move the agent from haiku to sonnet", and the gate rejected it: the issue's own case still failed (the real cause was a missing rule, a wrong diagnosis) while cost per task rose 1,618%. You may not reproduce one.
+`setTier` in `services/healer/src/promote.ts` made a new version that differs only in its model. With the shop's rules already in context, the small model matches the large one on nearly everything. Brief section 7 measured the gap: the small model erred only on the hardest request found (three orders in one message), about once in 17 tries. A suite of a few cases at two trials each cannot see an error that rare, so if you judge model changes, raise **Trials per eval case**. A *capability issue* arises when diagnosis finds the agent had the right rule in context and the right instructions and still got the reasoning wrong; the loop then proposes the next tier, and the gate shows pass rate against cost. Diagnosis must quote the note or instruction in the live version that already states the broken rule, and code checks that the quote is really there; without it the issue is filed as a knowledge gap, because a stronger model cannot follow a rule nobody wrote down. If the gate still rejects a tier move because the issue's own case keeps failing, the loop sends the issue back to diagnosis with the gate's reasons and carries on with whatever cause it now finds. An earlier exploratory run, before these checks, proposed "Move the agent from haiku to sonnet" for a missing rule, and the gate rejected it while cost per task rose 1,618%. You may not see either path on your run; both are covered by tests.
 
 ---
 
@@ -411,8 +411,7 @@ The *ratchet* is the one-sentence summary: every failure became a permanent test
 **Known limits, seen on the verified run**
 - The judge is a model and can be strict or wrong (Beats 3 and 11).
 - Two trials per case cannot see rare failures, and noise can make a good change look like a regression or a bad one look like a fix.
-- Memory can rot: a simulated customer contradicted a saved note (Beat 14), and on an exploratory run the loop saved a customer's wish for a card refund on a store-credit order as a note, which later led the agent to break the refund-method rule.
-- When one message both breaks a rule and states a preference, the failure is filed only as a customer preference: no shop issue and no eval case are written, so the rule is learned for that customer alone.
+- Memory can still rot. Simulated customers now stay consistent with their notes and the proposer edits a note a customer changes (Beat 14), but nothing checks that notes written over many sessions stay consistent with each other.
 - Refunds that are too small, or never issued, break no rule and pass the judge.
 - The model tier gap is narrow, and the router has no signal to learn from yet (Beats 16 and 17).
 
