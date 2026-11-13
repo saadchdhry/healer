@@ -1,54 +1,66 @@
 # Healer
 
-Healer is a small demo, run on your own machine, that shows how a self-improving AI agent works. A support agent for a fictional shop answers customers, and a learning loop watches every conversation, judges it, works out what went wrong, proposes a fix to the agent's context, harness or model, and keeps the fix only if a growing eval suite still passes. The shop front is the product; the console shows everything happening under the hood.
+Healer is a demo that runs on your own machine and shows how a self-improving AI agent works. A support agent for a fictional shop answers customers, while a learning loop judges every conversation, works out what went wrong, proposes a change to the agent, and keeps the change only if a growing set of tests still passes. The shop front is the product, and the console shows everything happening under the hood.
 
-The idea behind it is written up in [brief.md](brief.md).
-
-## Prerequisites
+## Requirements
 
 - Node 26 and npm
 - An Anthropic API key
 
 ## Set up
 
-Put your key in a `.env` file at the repo root:
+Create your `.env` file from the example, then put your key in it as `ANTHROPIC_API_KEY`:
 
-```
-ANTHROPIC_API_KEY=your-key-here
+```bash
+cp .env.example .env
 ```
 
-Then install and start everything with one command:
+Install dependencies:
 
-```
+```bash
 npm install
+```
+
+## Run
+
+```bash
 npm run dev
 ```
 
-This starts three processes: the shop service, the healer service and the web app.
+This starts the shop service, the healer service, and the web app.
 
 - Shop front: http://localhost:3000
 - Console: http://localhost:3000/console
 
-Without a key the pages still open, but the agent and the loop cannot call a model, and the console says so.
-
-## Things to try first
-
-- In the shop front, pick a customer, ask about an order and rate the reply. Then open the Run block in the console and follow the trace.
-- On the console map, fire the seeded case "Refund long after delivery" and watch the loop judge, diagnose, propose and gate a fix. Approve it from the Propose page.
-- On the Propose page, write an over-broad note by hand (for example "Never issue refunds") and run its gate to see the ratchet reject it.
-- Send a few simulated customers or a red team probe from the Traffic panel.
-- Switch autonomy between Manual, Approve and Automatic and fire another seeded case.
-
-## What it costs
-
-Every model call is live and the console's spend meter (bottom left) shows the running total. Rough figures:
-
-- A shop message: well under a cent on the smallest tier, plus about a cent for the judge.
-- One full fix (judge, diagnose, propose and gate): about 20 to 25 cents with 2 trials per eval case.
-- 5 simulated customers and 1 red team probe, judged: about 10 cents.
-
-A typical first session of chatting, a couple of fixes and some simulated traffic costs under a dollar. Lower "Trials per eval case" on the Gate page to spend less; moving the agent to Sonnet or Opus raises the cost of every reply.
+Every model call is live and billed to your key. The console shows the running spend.
 
 ## Reset
 
-Press "Reset to factory" on the console map. It restores the shop's orders, clears all history and puts version 0 back live. Seeded cases behave as described only on fresh shop data, so reset if one plays out differently than expected.
+Press "Reset to factory" on the console's home page. It restores the shop's orders, clears all history, and puts version 0 of the agent back in the shop.
+
+## Checks
+
+Neither needs an API key.
+
+```bash
+npm run typecheck
+```
+
+```bash
+npm test
+```
+
+## Layout
+
+| Folder | What it holds |
+|---|---|
+| `packages/agent` | The shared contract, the graph runner, the support agent, and its tools |
+| `services/shop` | The shop's backend, which runs the agent for customers |
+| `services/healer` | The learning loop: judge, diagnose, propose, gate, promote |
+| `web` | The shop front and the console |
+
+## Where to go next
+
+- [demo-beats.md](demo-beats.md): a step-by-step walkthrough of the whole demo.
+- [brief.md](brief.md): the idea behind the project and how it was designed.
+- [roadmap.md](roadmap.md): planned improvements.
