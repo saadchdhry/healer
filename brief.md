@@ -1,6 +1,6 @@
 # Healer: product brief
 
-Status: draft 6 (2026-11-11). Built and running on localhost. One decision is open: how the router gets a real training signal (section 5). See section 7 for what the build found.
+Status: draft 7 (2026-11-13). Built and running on localhost. Section 7 records what the build found. Further development is tracked in `roadmap.md`.
 
 ## Summary
 
@@ -220,8 +220,7 @@ Build risks:
 
 ### Open
 
-1. **The router's training signal.** As built, the router has nothing to learn (section 7). Options: label by risk (requests that end in a money-moving or irreversible action go to the large model), which is the recommendation; start the ladder from an older, weaker model to widen the gap; or leave the trainer showing an honest "nothing to learn yet".
-2. **Leftover scaffolding.** `web/src/dev/` (stand-in data used before the services existed) and `services/healer/src/stubs.ts` (now empty) can be deleted once the owner agrees.
+None. The router's training signal was decided on 2026-11-13: it will learn which requests carry risk, not which ones the small model fails. That work is not built yet and is specified in `roadmap.md`, which tracks all further development.
 
 ## 6. Out of scope
 
@@ -268,3 +267,4 @@ How to run it is in `README.md`. This section records what turned out differentl
 - 2026-11-11: Draft 4. Router confirmed. Scenario, hand-written graph, and TypeScript settled. Guided tour dropped. Demo concept rewritten around two tabs (shop front and console), a clickable concept map with deep dives, lineage between objects, and a three-part architecture. Customer simulator and seeded cases proposed as traffic sources.
 - 2026-11-11: Draft 5. Traffic sources confirmed. No open decisions remain. Build started.
 - 2026-11-11: Draft 6. Build complete. Added section 7 with what the build found. Router labelling description updated to match what was built. Router training signal reopened as a decision.
+- 2026-11-13: Draft 7. Router decision made (route by risk) and moved to `roadmap.md`. Leftover scaffolding deleted.
