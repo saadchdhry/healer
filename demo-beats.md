@@ -248,6 +248,8 @@ Look again at that first reply: the agent promised to remember before any memory
 **If it goes differently**
 If no "Remember for this customer" issue appears, the judge did not pick the preference up. Send the first message again in a new conversation.
 
+The first reply's verdict can fail for a reason that has nothing to do with the name. On one run it failed "The reply invents no facts" on the sentence "Once it ships, you'll get a notice." The preference issue was still filed, so carry on with step 2. The name itself cannot fail at this step, because the check on customer notes only exists once a note is live.
+
 ---
 
 ## Beat 11: The harness, enforcing in code (4 min)
