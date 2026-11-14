@@ -382,11 +382,14 @@ The only place weights really change in this demo is a small *router*: a word-co
 
 **Do this**
 1. On **Model**, under **The router**, set **Up to** to `12` examples and press **Build dataset** (about 30 seconds).
-2. Read **Labelled examples**: how many need the strong tier.
-3. Press **Train**. Read what appears under **Loss curve** and **Strongest words**.
+2. Read the line next to **Labelled examples**: how many need the strong tier. Expect 0 or 1.
+3. Press **Train**. If the count was 0, read the panel that appears above **Loss curve**. If it was 1 or more, read what appears under **Loss curve** and **Strongest words**.
 
 **What you should see**
-On the verified run 1 of 12 requests needed the strong tier: a multi-item return across two orders, the same kind of request brief section 7 found hardest. Training ran and reported 100% validation accuracy, followed by the warning "None of the held-out requests needed the strong tier, so validation accuracy says nothing about hard requests". Every one of the strongest words ("order", "my", "pm", "please") pushed toward the small tier. With a dataset that has no positive examples at all, **Train** instead shows "Nothing to train on yet." and refuses, explaining that no request failed on Haiku and passed on the stronger tier.
+One of two results. Which one you get is chance, and either one completes the beat.
+
+- No request needs the strong tier. This is the usual result (brief section 7). The line next to **Labelled examples** says "0 need the strong tier". **Train** refuses and shows a panel that starts "Nothing to train on yet." It says none of the examples failed on haiku and passed on the stronger tier, and adds "This is an expected state, not a fault." **Loss curve** still reads "No router trained yet." and **Propose a routed config** stays greyed out. The panel also suggests sending harder traffic and building the dataset again. Do not chase it: a build of 12 costs about 15 cents, and across 160 replays the build behind brief section 7 never found a positive example.
+- One request needs the strong tier. On the two verified runs that went this way it was 1 of 12, and a different request each time. Once it was a multi-item return across two orders, the same kind of request brief section 7 found hardest. Once it was a plain refund request where the small model passed the case to a person at once and the large model asked the customer first, which is a difference in manner and not an error. Training ran and reported 100% validation accuracy, followed by the warning "None of the held-out requests needed the strong tier, so validation accuracy says nothing about hard requests". Every one of the strongest words (such as "pm", "order" and "please") pushed toward the small tier.
 
 **What just happened**
 Either way, the router has nothing worth learning: failures on the small model are too rare for a classifier to find a pattern. A router trained on one positive example is not a router. The code is in `services/healer/src/routerTraining.ts` and `packages/agent/src/router.ts`. `roadmap.md` item 1 explains the planned fix: teach the router which requests carry risk (refunds and cancellations move money), not which ones the small model happens to fail. Do not press **Propose a routed config** here.
