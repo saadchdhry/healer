@@ -49,7 +49,7 @@ export const loopGraph = new Graph<LoopState>('improvement_loop', 'judge')
     if (s.autonomy !== 'manual') s.pending.push(...preferenceIssues.map((i) => i.id));
     return { passed: verdict.passed, failed: verdict.checks.filter((c) => !c.passed).map((c) => c.checkId), preferences: preferenceIssues.length };
   })
-  .node('diagnose', 'Diagnose', 'Name the cause of the failure (knowledge, process or capability), file it under an issue, and write an eval case for it. After the gate rejects a stronger model, decide the cause again.', async (s) => {
+  .node('diagnose', 'Diagnose', 'Name the cause of the failure (knowledge, process or capability), file it under an issue, and write an eval case for it, tested before it joins the suite. After the gate rejects a stronger model, decide the cause again.', async (s) => {
     s.h.checkEpoch(s.epoch);
     if (s.afterGate === 'rediagnose') {
       const issueId = s.pending[0]!;

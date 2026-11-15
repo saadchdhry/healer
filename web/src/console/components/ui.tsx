@@ -187,6 +187,7 @@ const jobRef: Partial<Record<Job['kind'], { kind: RefKind; word: string }>> = {
   gate: { kind: 'proposal', word: 'For proposal' },
   propose: { kind: 'issue', word: 'For issue' },
   eval: { kind: 'evalRun', word: 'Eval run' },
+  validate: { kind: 'evalCase', word: 'For eval case' },
 };
 
 export function JobProgress({ job }: { job: Job }) {

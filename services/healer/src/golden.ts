@@ -9,7 +9,7 @@ const invariant: EvalCheckSpec = { id: 'policy', kind: 'invariant', label: 'Ever
 const noWrites: EvalCheckSpec = { id: 'no_writes', kind: 'tool_sequence', label: 'Changes nothing', params: { mustNotCall: [...WRITE_TOOLS] } };
 
 function golden(id: string, title: string, customerId: string, message: string, checks: EvalCheckSpec[]): EvalCase {
-  return { id: `golden_${id}`, createdAt: now(), title, origin: 'golden', sourceTraceId: null, issueId: null, customerId, history: [], message, env: seedSnapshot(), checks: [invariant, ...checks], enabled: true };
+  return { id: `golden_${id}`, createdAt: now(), title, origin: 'golden', sourceTraceId: null, issueId: null, customerId, history: [], message, env: seedSnapshot(), checks: [invariant, ...checks], enabled: true, validation: null };
 }
 
 export function goldenCases(): EvalCase[] {

@@ -363,6 +363,22 @@ export interface EvalCase {
   env: EnvSnapshot;
   checks: EvalCheckSpec[];
   enabled: boolean;
+  // How the case was tested before it joined the suite; null for a case never tested.
+  validation: CaseValidation | null;
+}
+
+// The test a new case gets before it joins the suite. Checks that conflict with shop policy, or that a reference agent
+// shown every rule failed on every counting run, are moved out of `checks` into `setAside`, where a person can put them back.
+export interface CaseValidation {
+  at: string;
+  referenceTier: Tier;
+  referenceTraceIds: string[];
+  // Whether the case fails on the trace it came from; null for a case with no source trace.
+  catchesSource: boolean | null;
+  // The checks that fail on the source trace.
+  caughtBy: string[];
+  setAside: { check: EvalCheckSpec; reason: string }[];
+  flagged: { checkId: string; reason: string }[];
 }
 
 export interface TrialResult {
@@ -466,14 +482,15 @@ export interface Job {
     | 'diagnose'
     | 'propose'
     | 'router_dataset'
-    | 'router_train';
+    | 'router_train'
+    | 'validate';
   label: string;
   status: 'running' | 'done' | 'failed';
   progress: { done: number; total: number };
   startedAt: string;
   endedAt: string | null;
   error?: string;
-  // What the job belongs to: gate → proposal id, propose → issue id, eval → eval run id, diagnose → null.
+  // What the job belongs to: gate → proposal id, propose → issue id, eval → eval run id, validate → eval case id, diagnose → null.
   refId: string | null;
 }
 

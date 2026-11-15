@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { NOTABLE_ORDERS as O, ScriptedLlm, type EvalCheckSpec, type ToolCallRecord } from '@healer/agent';
-import { checkSpecSchema, endStateCheck, evaluateChecks, exactMatchCheck, invariantCheck, toolSequenceCheck } from './evals.ts';
+import { NOTABLE_ORDERS as O, ScriptedLlm, seedSnapshot, type EvalCheckSpec, type ToolCallRecord } from '@healer/agent';
+import { checkConflicts, checkSpecSchema, endStateCheck, evaluateChecks, exactMatchCheck, invariantCheck, toolSequenceCheck } from './evals.ts';
 import { runSuite } from './evalRunner.ts';
 import { makeTrace, setupHealer, waitFor } from './testing.ts';
 
@@ -103,4 +103,27 @@ test('editing a case\'s checks drops its cached results; editing the title does 
   assert.deepEqual(second.results.map((r) => [r.caseId, r.passed]), [['golden_cancel', true]]);
   assert.equal((await runSuite(h.healer, 0)).id, second.id, 'the fresh result is reused from then on');
   h.close();
+});
+
+test('checkConflicts: end_state checks that demand what shop policy forbids', () => {
+  const env = seedSnapshot();
+  const conflict = (customerId: string, params: Record<string, unknown>) => checkConflicts(spec('end_state', params), env, customerId);
+  assert.match(conflict('c_tom', { orderId: O.openedItem, refund: { amount: 66 } })!, /at most \$59\.40 is refundable/);
+  assert.match(conflict('c_diego', { orderId: O.openedItem, refund: { amount: 20 } })!, /belongs to another customer/);
+  assert.match(conflict('c_diego', { orderId: O.inTransit, refund: { amount: 20 } })!, /has not been delivered/);
+  assert.match(conflict('c_marcus', { orderId: O.outsideRefundWindow, refund: { amount: 24 } })!, /52 days before the case starts/);
+  assert.match(conflict('c_lena', { orderId: O.alreadyRefunded, refund: { amount: 10 } })!, /already has refund RF-0001/);
+  const large = conflict('c_priya', { orderId: O.highValue, refund: { amount: 160 } })!;
+  assert.match(large, /above \$150\.00 must go to a human/);
+  assert.doesNotMatch(large, /refundable/);
+  assert.match(conflict('c_marcus', { orderId: O.storeCredit, refund: { amount: 21, method: 'original_payment' } })!, /paid with store credit, so it must go to store_credit/);
+  assert.match(conflict('c_diego', { orderId: O.inTransit, status: 'cancelled' })!, /cancelled on PM-1013, which is shipped, not processing/);
+  assert.match(conflict('c_diego', { orderId: O.inTransit, address: '1 New Street' })!, /new shipping address on PM-1013, which is shipped/);
+  assert.match(conflict('c_tom', { orderId: 'PM-9999', refund: { none: true } })!, /PM-9999, which is not in the case's records/);
+
+  assert.equal(conflict('c_tom', { orderId: O.openedItem, refund: { amount: 37.4, method: 'original_payment' } }), null, 'a partial refund below the cap');
+  assert.equal(conflict('c_ava', { orderId: O.processing, status: 'cancelled', address: '8 Clifton Park Road' }), null);
+  assert.equal(conflict('c_marcus', { orderId: O.outsideRefundWindow, refund: { none: true }, escalated: false }), null);
+  assert.equal(conflict('c_tom', { orderId: 'PM-1005', status: 'cancelled' }), null, 'an order already cancelled needs nothing done');
+  assert.equal(checkConflicts(spec('rubric', { criterion: 'Refund $500' }), env, 'c_tom'), null);
 });
