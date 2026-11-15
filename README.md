@@ -40,6 +40,7 @@ Every model call is live and billed to your key. The console shows the running s
 | [roadmap.md](roadmap.md) | Planned improvements and known defects, each written to be picked up without earlier context |
 | [AGENTS.md](AGENTS.md) | Working rules for an AI agent making changes to this project |
 | `notes.md` | The owner's inbox for feedback and requests. Local only, not in the repository |
+| `packages/agent/src/types.ts` and `api.ts` | The contract shared by both services and the web app. Change it first and let `npm run typecheck` find everything that has to follow |
 
 ## How it fits together
 

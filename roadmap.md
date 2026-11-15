@@ -7,6 +7,7 @@ Planned developments and improvements. Each item is written to be picked up by s
 - Read `brief.md` first for what the project is and why. Section 7 of the brief records what the build found.
 - `README.md` says how to run it. Every model call is live and costs money, so each item below gives a rough spend.
 - An item is ready to build when it has all the parts used below: status, why, current behaviour, the change, where the code is, done when, and cost.
+- Before building an item, check its "Where the code is" section against the code, since names may have moved since it was written. Turn each "Done when" line into a test where one can be written.
 - When an item ships, move it to "Done" at the bottom with the date and one line on what changed, and update `brief.md` wherever it describes the old behaviour.
 
 ## Background every item assumes
