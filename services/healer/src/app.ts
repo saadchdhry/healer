@@ -426,7 +426,7 @@ export function createHealerApp(options: HealerOptions) {
     const dataset = store.routerDataset();
     if (!dataset.some((e) => e.needsStrong)) {
       throw conflict(
-        `The dataset has no requests that needed the stronger model yet: none of its ${dataset.length} examples failed on haiku and passed on the stronger tier. Send harder traffic, such as the multi-rule seeded cases or more simulated customers, then build the dataset again.`,
+        `The dataset has no requests that carry risk yet: in none of its ${dataset.length} examples did a replay attempt a refund or a cancellation, or haiku fail where the stronger tier kept every rule. Send traffic that asks for refunds or cancellations, such as the seeded cases or more simulated customers, then build the dataset again.`,
       );
     }
     return c.json<Res<'POST /api/healer/model/router/train'>>(await trainAndStore(h));

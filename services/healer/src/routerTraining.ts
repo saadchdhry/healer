@@ -1,13 +1,13 @@
 import { createHash } from 'node:crypto';
-import { Environment, roundCents, runAgent, trainRouter, type AgentVersion, type Job, type Proposal, type RouterExample, type RouterModel, type Tier, type Trace } from '@healer/agent';
+import { Environment, isHighStakesTool, roundCents, runAgent, trainRouter, type AgentVersion, type Job, type Proposal, type RouterExample, type RouterModel, type Tier, type Trace } from '@healer/agent';
 import { newId, type Healer } from './console.ts';
 import { pool } from './evalRunner.ts';
 import { policyChecks } from './judge.ts';
 import { envChanges, usd } from './policy.ts';
 import { createProposal } from './propose.ts';
 
-// The real model surface: a small router trained on the demo's own traces, deciding per request whether
-// the small model is enough. Supervised learning at toy scale.
+// The real model surface: a small router trained on the demo's own traces. It learns which requests carry risk and
+// sends those to the stronger model. Supervised learning at toy scale.
 
 export const EASY_TIER: Tier = 'haiku';
 export const EASY_REPLAYS = 4;
@@ -95,6 +95,18 @@ export function wrongness(easy: Trace, reference: Trace): string | null {
   return null;
 }
 
+export const attemptedHighStakes = (t: Trace) => t.toolCalls.some((c) => isHighStakesTool(c.name));
+
+// Failures are too rare to learn from alone, so a request also needs the strong model when any replay attempted a
+// tool that moves money or cannot be undone, even one a guard blocked. Only a measured failure needs a reference
+// that kept every rule. `shown` is the easy replay the dataset links to: the wrong one, else one that took the risk.
+export function labelRequest(reference: Trace, easy: Trace[]): { reason: RouterExample['reason']; easyPassed: boolean; hardPassed: boolean; shown: Trace } {
+  const wrong = easy.find((t) => wrongness(t, reference) !== null);
+  const hardPassed = passesPolicy(reference);
+  const reason = wrong && hardPassed ? 'measured_failure' : [reference, ...easy].some(attemptedHighStakes) ? 'high_stakes' : null;
+  return { reason, easyPassed: !wrong, hardPassed, shown: wrong ?? easy.find(attemptedHighStakes) ?? easy[0]! };
+}
+
 const textKey = (text: string) => createHash('sha256').update(text).digest('hex');
 
 // Deterministic and stratified: within each class, ordered by a hash of the text, every fourth example is held out.
@@ -125,15 +137,15 @@ export function startDatasetJob(h: Healer, maxExamples: number): Job {
       const [reference, ...easy] = await Promise.all([replay(h, live, source, hard), ...Array.from({ length: EASY_REPLAYS }, () => replay(h, live, source, EASY_TIER))]);
       h.checkEpoch(epoch);
       replays += 1 + easy.length;
-      const wrong = easy.find((t) => wrongness(t, reference) !== null);
-      const hardPassed = passesPolicy(reference);
+      const { reason, easyPassed, hardPassed, shown } = labelRequest(reference, easy);
       examples.push({
         id: `rx_${textKey(source.input).slice(0, 12)}`,
         text: source.input,
-        needsStrong: Boolean(wrong) && hardPassed,
-        easyTraceId: (wrong ?? easy[0]!).id,
+        needsStrong: reason !== null,
+        reason,
+        easyTraceId: shown.id,
         hardTraceId: reference.id,
-        easyPassed: !wrong,
+        easyPassed,
         hardPassed,
       });
       job.progress(++done);
@@ -141,10 +153,10 @@ export function startDatasetJob(h: Healer, maxExamples: number): Job {
     const order = new Map(sources.map((s, i) => [s.input, i]));
     const dataset = assignSplits(examples.sort((a, b) => order.get(a.text)! - order.get(b.text)!));
     h.store.setRouterDataset(dataset);
-    const positives = dataset.filter((e) => e.needsStrong).length;
+    const count = (reason: RouterExample['reason']) => dataset.filter((e) => e.reason === reason).length;
     h.activity(
       'judge',
-      `Router dataset: ${dataset.length} requests, ${replays} replays (${EASY_REPLAYS} on ${EASY_TIER} and 1 on ${hard} each), labelled by the policy rules and by agreement with ${hard}, no model judge; ${positives} needed ${hard}`,
+      `Router dataset: ${dataset.length} requests, ${replays} replays (${EASY_REPLAYS} on ${EASY_TIER} and 1 on ${hard} each), labelled by risk in code, no model judge; ${dataset.length - count(null)} carry risk and go to ${hard} (${count('high_stakes')} attempted a refund or cancellation, ${count('measured_failure')} failed on ${EASY_TIER} where ${hard} kept every rule)`,
     );
     h.changed('trace');
   });
@@ -175,11 +187,12 @@ export function proposeRouter(h: Healer, router: RouterModel): Proposal {
     issueId: null,
     title: `Route each request between ${EASY_TIER} and ${hard} with router ${router.id}`,
     rationale: [
-      `Router ${router.id} is a bag-of-words classifier trained on ${m.trainSize} requests from this demo's own traces (${m.trainPositives} of them needed ${hard}), each replayed ${EASY_REPLAYS} times on ${EASY_TIER} and once on ${hard}. It sends a request to ${hard} only when it predicts ${EASY_TIER} would get it wrong.`,
+      `Router ${router.id} is a bag-of-words classifier trained on ${m.trainSize} requests from this demo's own traces, each replayed ${EASY_REPLAYS} times on ${EASY_TIER} and once on ${hard}. It learns which requests carry risk and sends those to ${hard}, while lookups and questions stay on ${EASY_TIER}.`,
+      `A request counts as risky when a replay attempted a refund or a cancellation, or when ${EASY_TIER} got it wrong where ${hard} kept every rule; ${m.trainPositives} of the training requests do.`,
       `It scores ${pct(m.trainAccuracy)} on its training examples and ${pct(m.valAccuracy)} on ${m.valSize} held-out examples.`,
       m.valPositives
-        ? `Of the ${m.valPositives} held-out requests that needed ${hard}, it routes ${pct(m.valRecall ?? 0)} there.`
-        : `None of the held-out requests needed ${hard}, so the held-out accuracy says nothing about whether it sends hard requests to ${hard}; it only shows that easy requests stay on ${EASY_TIER}.`,
+        ? `Of the ${m.valPositives} held-out requests that carry risk, it routes ${pct(m.valRecall ?? 0)} to ${hard}.`
+        : `None of the held-out requests carry risk, so the held-out accuracy says nothing about whether it sends risky requests to ${hard}; it only shows that low-risk requests stay on ${EASY_TIER}.`,
       'This is supervised learning at toy scale, so the gate decides: it is kept only if every capability case is routed to the strong tier, nothing regresses and the pass rate holds. The point is a lower cost per task.',
     ].join(' '),
     changes: [{ surface: 'model', op: 'set_model', model: { mode: 'routed', easyTier: EASY_TIER, hardTier: hard, effort: live.model.effort, router } }],

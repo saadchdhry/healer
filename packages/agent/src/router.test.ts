@@ -11,6 +11,7 @@ function examples(): RouterExample[] {
     id: `${needsStrong ? 'h' : 'e'}${i}`,
     text,
     needsStrong,
+    reason: needsStrong ? 'measured_failure' : null,
     split: i === 3 ? 'val' : 'train',
     easyTraceId: 'x',
     hardTraceId: 'y',

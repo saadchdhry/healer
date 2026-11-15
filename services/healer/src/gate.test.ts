@@ -63,7 +63,7 @@ test('a change made only to save money leads with cost per task', () => {
 });
 
 test('a routed candidate is rejected when it sends a capability case to the small model, whatever the trials say', () => {
-  const routing = { easyTier: 'haiku' as const, hardTier: 'sonnet' as const, cases: [{ caseId: 'hard', score: 0.12, needsStrong: false }, { caseId: 'other', score: 0.91, needsStrong: true }] };
+  const routing = { easyTier: 'haiku' as const, hardTier: 'sonnet' as const, cases: [{ caseId: 'hard', score: 0.12, needsStrong: false }, { caseId: 'other', score: 0.91, needsStrong: true }], dataset: { size: 40, toHard: 15 } };
   const d = decide(run(0, [['hard', true], ['other', true]], 0.01), run(7, [['hard', true], ['other', true]], 0.001), null, title, { costFirst: true, routing });
   assert.equal(d.decision, 'reject');
   assert.match(d.reasons[0]!, /^Rejected: cost per task would go from .+, but 1 capability case is routed to haiku\.$/);
@@ -71,4 +71,5 @@ test('a routed candidate is rejected when it sends a capability case to the smal
   const ok = decide(run(0, [['hard', true]], 0.01), run(8, [['hard', true]], 0.001), null, title, { costFirst: true, routing: { ...routing, cases: [routing.cases[1]!] } });
   assert.equal(ok.decision, 'accept');
   assert.ok(ok.reasons.includes('Routing: all 1 capability case goes to sonnet (router score 0.91).'));
+  assert.ok(ok.reasons.includes('Routing share: of the 40 requests in the router dataset, it sends 15 (38%) to sonnet and the other 25 to haiku.'));
 });

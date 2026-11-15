@@ -25,6 +25,8 @@ export interface RoutingCheck {
   easyTier: Tier;
   hardTier: Tier;
   cases: { caseId: string; score: number; needsStrong: boolean }[];
+  // How many requests in the router dataset it sends to the hard tier, which is where the saving comes from.
+  dataset: { size: number; toHard: number };
 }
 
 // Accept only if no case regressed, the pass rate did not drop, (for a proposal fixing an issue) at least one
@@ -90,6 +92,12 @@ export function decide(
           : 'Routing: no enabled eval case belongs to a capability issue, so routing was not checked case by case.',
       );
     }
+    const { size, toHard } = routing.dataset;
+    if (size) {
+      reasons.push(
+        `Routing share: of the ${size} requests in the router dataset, it sends ${toHard} (${pct(toHard / size)}) to ${routing.hardTier} and the other ${size - toHard} to ${routing.easyTier}.`,
+      );
+    }
   }
   for (const r of regressed) {
     reasons.push(`Regressed: "${title(r.caseId)}" passed on version ${base.versionId} and fails on version ${candidate.versionId} (${trials(r)}).${failingDetail(r)}`);
@@ -151,6 +159,7 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
             .list()
             .filter((c) => c.enabled && c.issueId && store.issues.get(c.issueId)?.cause === 'capability')
             .map((c) => ({ caseId: c.id, ...predictRoute(model.router, c.message) })),
+          dataset: { size: store.routerDataset().length, toHard: store.routerDataset().filter((e) => predictRoute(model.router, e.text).needsStrong).length },
         }
       : null;
   const result = decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id, { costFirst, routing });

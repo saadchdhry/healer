@@ -21,6 +21,11 @@ export const TOOL_INPUTS = {
 
 export const TOOL_NAMES = Object.keys(TOOL_INPUTS) as ToolName[];
 
+// Tools that move money or cannot be undone. An address change can be undone while the order is processing,
+// and an escalation hands the case to a person, which is the safe direction.
+const HIGH_STAKES_TOOLS: ToolName[] = ['issue_refund', 'cancel_order'];
+export const isHighStakesTool = (name: ToolName): boolean => HIGH_STAKES_TOOLS.includes(name);
+
 export function toolDefinitions(tools: ToolConfig[]): LlmTool[] {
   return tools
     .filter((t) => t.enabled)

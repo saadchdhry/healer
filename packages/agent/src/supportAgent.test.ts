@@ -124,8 +124,8 @@ test('the step limit ends the loop with a fallback reply', async () => {
 
 test('a routed model asks the router and records its decision', async () => {
   const router = trainRouter([
-    { id: 'a', text: 'refund discount opened', needsStrong: true, split: 'train', easyTraceId: '', hardTraceId: '', easyPassed: false, hardPassed: true },
-    { id: 'b', text: 'where is my parcel', needsStrong: false, split: 'train', easyTraceId: '', hardTraceId: '', easyPassed: true, hardPassed: true },
+    { id: 'a', text: 'refund discount opened', needsStrong: true, reason: 'measured_failure', split: 'train', easyTraceId: '', hardTraceId: '', easyPassed: false, hardPassed: true },
+    { id: 'b', text: 'where is my parcel', needsStrong: false, reason: null, split: 'train', easyTraceId: '', hardTraceId: '', easyPassed: true, hardPassed: true },
   ]);
   const version = factoryVersion();
   version.model = { mode: 'routed', easyTier: 'haiku', hardTier: 'opus', effort: 'low', router };
