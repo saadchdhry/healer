@@ -71,7 +71,7 @@ export const loopGraph = new Graph<LoopState>('improvement_loop', 'judge')
     s.attempts++;
     return { issueId, proposalId: proposal.id, attempt: s.attempts };
   })
-  .node('gate', 'Gate', 'Run the whole eval suite on the live version and the candidate, and accept only if nothing regressed and the issue is fixed.', async (s) => {
+  .node('gate', 'Gate', "Run the whole eval suite on the live version and the candidate, and accept only if nothing regressed and the issue is fixed. A proposal for one customer's preference that changes anything but that customer's notes is refused without running the suite.", async (s) => {
     s.h.checkEpoch(s.epoch);
     const id = s.proposalId!;
     s.gateRun = await s.h.stage('gate', 'Gate a proposal', () =>

@@ -286,6 +286,37 @@ test('a failed verdict that also states a preference is diagnosed first, then th
   h.close();
 });
 
+test('a preference proposal that edits a shop-wide note is refused without running the suite, and the proposer is told why', async () => {
+  class ShopNoteFirst extends PreferenceJudge {
+    proposeSystems: string[] = [];
+    override async json<T>(req: LlmRequest & { schema: z.ZodType<T> }): Promise<JsonResult<T>> {
+      if (req.role !== 'propose') return super.json(req);
+      this.proposeSystems.push(req.system);
+      const changes = this.proposeSystems.length === 1 ? [{ op: 'edit', noteId: 'note_shop', text: 'Refunds are allowed only within 30 days of delivery. Call Marcus Marc.' }] : [{ op: 'add', text: 'Prefers to be called Marc.' }];
+      const value = req.schema.parse({ title: `Attempt ${this.proposeSystems.length}`, rationale: 'He asked.', changes });
+      return { value, run: finishModelRun(modelRun(req, req.role, {}), value, req.model, 10, 10) };
+    }
+  }
+  const llm = new ShopNoteFirst();
+  const h = await started(llm);
+  const shopNote = { id: 'note_shop', scope: { kind: 'shop' as const }, text: 'Refunds are allowed only within 30 days of delivery.', addedInVersion: 0, issueId: null };
+  h.store.versions.put({ ...h.store.liveVersion()!, context: [shopNote] });
+  h.shop.publish({ type: 'trace.completed', trace: makeTrace('c_marcus', () => {}, { input: 'Please call me Marc from now on. Where is my order?' }) });
+  await waitFor(() => h.store.proposals.list().some((p) => p.status === 'awaiting_approval'), 10_000);
+  await idle(h);
+
+  const [refused, accepted] = h.store.proposals.list();
+  assert.equal(h.store.proposals.count(), 2);
+  const refusal = h.store.gateRuns.get(refused!.gateRunId!)!;
+  assert.deepEqual([refused!.status, refusal.decision, refusal.baseRunId, refusal.candidateRunId], ['rejected', 'reject', null, null]);
+  const reason = 'Refused without running the eval suite: this issue is a preference of customer c_marcus, so its proposal may only add, edit or remove notes about that customer, but it edits note note_shop, a shop-wide note.';
+  assert.deepEqual(refusal.reasons, [reason]);
+  assert.ok(llm.proposeSystems[1]!.includes(reason), 'the retry is told why the first attempt was refused');
+  assert.deepEqual([accepted!.status, accepted!.changes], ['awaiting_approval', [{ surface: 'context', op: 'add', scope: { kind: 'customer', customerId: 'c_marcus' }, text: 'Prefers to be called Marc.' }]]);
+  assert.deepEqual(h.store.liveVersion()!.context, [shopNote]);
+  h.close();
+});
+
 test('a waiting proposal whose changes no longer apply is discarded with the reason when another is promoted', async () => {
   const h = await started(new FakeLlm());
   await h.call('PUT', '/api/healer/settings', { autonomy: 'manual' });
