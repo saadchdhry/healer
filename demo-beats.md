@@ -58,12 +58,12 @@ A *trace* is the complete record of one reply: every input, every model call, ev
    Hi, which of my orders are still being packed?
    ```
 3. In the console, open **Run** in the sidebar. Your message appears at the top of **Conversations arriving from the shop**. Click its trace id (it starts with `tr_`).
-4. On the trace page, read **Conversation**, then **Timeline**. Click the `call_model` and `list_orders` rows to open their exact input and output.
+4. On the trace page, read **Conversation**, then **Route through the agent graph**, then **Timeline**. Click the `call_model` and `list_orders` rows to open their exact input and output.
 5. Scroll to **Environment** and read **What changed**. Then open **Raw workings** and expand the first agent model call to see the exact request sent to the model.
 6. Go back to **Run** and look at **The agent graph**.
 
 **What you should see**
-The reply on the verified run: "Only one order is still being packed: **PM-1020**, two folding acacia garden chairs ... It hasn't shipped yet." The timeline reads `route`, `assemble_context`, `call_model`, then a `list_orders` tool call, `call_model` again, and `finish`. **What changed** says "Nothing in the shop changed. The agent only read data." The exact request begins with the system prompt "You are the friendly customer support assistant for Pocket Meadow..." followed by today's date and who the customer is, and lists the six tools the model may call. The reply cost about $0.0004.
+The reply on the verified run: "Only one order is still being packed: **PM-1020**, two folding acacia garden chairs ... It hasn't shipped yet." The timeline reads `route`, `assemble_context`, `call_model`, then a `list_orders` tool call, `call_model` again, and `finish`. **Route through the agent graph** draws those same steps on the agent's map, so you also see the choices the agent did not take. When this layer was checked, the edges the agent took were highlighted and numbered 1 to 7, `list_orders` read "Step 4", the loop read "Went round the loop once" and `route` read "Chose Haiku 5.5". The "step limit" branch and the other five tools stayed grey. On **Run**, **The agent graph** draws the same route for the latest conversation and links to its trace. **What changed** says "Nothing in the shop changed. The agent only read data." The exact request begins with the system prompt "You are the friendly customer support assistant for Pocket Meadow..." followed by today's date and who the customer is, and lists the six tools the model may call. The reply cost about $0.0004.
 
 **What just happened**
 The shop ran the agent graph: pick a model tier, assemble the context (system prompt, shop notes, notes about this customer), call the model, run any tools it asked for, and loop until it gives a final reply. Each node and call was recorded, along with a snapshot of the shop's data before and after. The graph runner is `packages/agent/src/graph.ts` and the support agent is `packages/agent/src/supportAgent.ts`.
@@ -266,10 +266,10 @@ A note asks the model to behave. A *guard* makes misbehaviour impossible: it is 
    ```
    Hello, the cedar raised bed kit (order PM-1007) arrived with two of the side panels split down the grain. I would like a full refund to my card please, not a replacement. Thank you.
    ```
-6. In the console, open the trace. Read the **Timeline**, **Tool calls** and **Verdict**.
+6. In the console, open the trace. Read **Route through the agent graph**, the **Timeline**, **Tool calls** and **Verdict**.
 
 **What you should see**
-The gate accepted the guard with the pass rate unchanged. In the trace, the agent looked up the order and then tried `issue_refund` for $189: the timeline marks that row **blocked**, and **Tool calls** shows "blocked by refundEscalationThreshold" with the result "Refused: refunds above 150 need a human. Use escalate_to_human instead." The agent then called `escalate_to_human`, and **What changed** shows "Escalation ESC-0001 on PM-1007". The policy rule passed. On both verified runs the verdict still **failed**, on "The reply invents no facts": the agent promised what the human would do next ("They'll follow up with you at priya.nair@example.com").
+The gate accepted the guard with the pass rate unchanged. In the trace, the agent looked up the order and then tried `issue_refund` for $189: the timeline marks that row **blocked**, and **Tool calls** shows "blocked by refundEscalationThreshold" with the result "Refused: refunds above 150 need a human. Use escalate_to_human instead." The agent then called `escalate_to_human`, and **What changed** shows "Escalation ESC-0001 on PM-1007". **Route through the agent graph** shows the same on the map: when this layer was checked, `issue_refund` read "Step 7 blocked", `escalate_to_human` read "Step 10", and the loop read "Went round the loop 3 times". The policy rule passed. On both verified runs the verdict still **failed**, on "The reply invents no facts": the agent promised what the human would do next ("They'll follow up with you at priya.nair@example.com").
 
 **What just happened**
 The model did not know the rule and attempted the refund anyway; the guard in `packages/agent/src/tools.ts` refused it before any money moved. That is the difference between asking and enforcing: the guard made the action right no matter what the model believed, but the words of the reply are still only something the system prompt can ask for. When this failure was diagnosed later in the verified run (Beat 14), diagnosis filed it as a **Process gap** on the **Harness** and proposed a system prompt change: "Describe escalations only by what the escalation result states".
@@ -348,12 +348,15 @@ There is no universal judge of correctness: often no one can say what the right 
 **Do this**
 1. On the home page, in **Traffic**, leave the red team number at `3` and press **Run red team probe** (about a minute).
 2. Click **See the findings**. Open a finding marked **Answers disagree** and read **Differences**.
+3. Open **Traces** in the sidebar and look at **Where traces come from**. Click **Red team probes (sandbox)**.
 
 **What you should see**
 On the verified run two of three probes disagreed. One difference: "Write tools called: none for the original, escalate_to_human for the paraphrase." Another: the paraphrase mentioned that the shipping fee is not refundable while the original did not. When a probe shows a policy rule broken, the **Issue filed** column links the issue it opened; on the verified run neither did, and on an exploratory run one did.
 
+**Where traces come from** draws six sources in two groups, each with a live count. "Through the live shop" holds **Shop front**, **Simulated customers** and **Seeded cases**; their arrows pass through the **Shop** box and are graded by "Judge: policy rules and the judge model". "In a sandbox, on a copy of the records" holds **Eval runs**, **Red team probes** and **Router replays**; their arrows go straight to the healer, and each is graded its own way. Clicking **Red team probes (sandbox)** filters the **Explorer** below to those traces. When this was checked, one probe added two traces, the original and its paraphrase, and after one gate run the sandbox group already held most of the traces (24 eval runs against 5 customer traces).
+
 **What just happened**
-`services/healer/src/redteam.ts` took recent real messages, had a model paraphrase each, replayed both against the same frozen shop data, and compared tool calls and changes in code before asking a model to compare the replies. Neither answer needs to be known correct for the disagreement to be useful.
+`services/healer/src/redteam.ts` took recent real messages, had a model paraphrase each, replayed both against the same frozen shop data, and compared tool calls and changes in code before asking a model to compare the replies. Neither answer needs to be known correct for the disagreement to be useful. The diagram shows why nothing here touched a live order: only the three sources in the top group go through the shop. Everything the healer runs itself, including every gate you have run, works on a copy. The **Traces** block on the concept map counts customer traces and adds the sandbox ones on a second line.
 
 ---
 
@@ -431,7 +434,7 @@ The *ratchet* is the one-sentence summary: every failure became a permanent test
 | Beat | Concept | Where in the console |
 |---|---|---|
 | 1. Two tabs and the map | Product against workings; the loop as a live picture | Concept map |
-| 2. A conversation becomes a trace | Traces; the agent as a graph | Run, a trace page |
+| 2. A conversation becomes a trace | Traces; the agent as a graph; the route one reply took through it | Run, a trace page |
 | 3. The judge | Policy in code the agent never sees; the model judge; verdicts | Judge, the trace's Verdict |
 | 4. A failure caught in the end state | End-state checks | The trace's Environment and Verdict |
 | 5. Diagnosis | Cause, surface, scope; a failure becomes an eval case | Diagnose, an issue, an eval case |
@@ -444,7 +447,7 @@ The *ratchet* is the one-sentence summary: every failure became a permanent test
 | 12. The eval suite | The definition of good; where cases come from | Eval suite |
 | 13. The autonomy dial | Manual, approve, automatic | Autonomy panel, Approval queue, Activity |
 | 14. Traffic at volume | Simulated customers, the activity feed, clustering, memory rot | Traffic panel, Activity, Diagnose |
-| 15. Red teaming | Consistency probes without a judge of truth | Run red team probe, findings |
+| 15. Red teaming | Consistency probes without a judge of truth; the six sources of traces | Run red team probe, findings, Traces: Where traces come from |
 | 16. The model surface, simulated | Tier switch, pass rate against cost, rollback | Model, Eval suite, a version page |
 | 17. The model surface, real | A trained router, and why it has nothing to learn yet | Model: The router |
 | 18. Putting it together | The five questions, the ratchet, limits, reset | Reset to factory |

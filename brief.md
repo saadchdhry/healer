@@ -110,8 +110,8 @@ Every deep dive has three layers: what the stage is (two or three sentences), it
 
 | Block | Its deep dive shows |
 |---|---|
-| Run | A live feed of conversations arriving from the shop, each opening its trace |
-| Traces | Run → trace → thread explorer. Every model call and tool call with exact input and output |
+| Run | A live feed of conversations arriving from the shop, each opening its trace, and the agent graph with the route the latest conversation took through it |
+| Traces | A diagram of where traces come from, then a run → trace → thread explorer. Every model call and tool call with exact input and output, and the trace's route drawn on the agent graph |
 | Judge | The verdict on each trace: which check failed (answer criteria, end state of the database, tool sequence), any customer rating, and the judge's own prompt and reasoning |
 | Diagnose | Failures clustered into issues. Each issue names a cause (knowledge, process, or capability) and the surface and scope it points at |
 | Propose | Proposed changes as diffs, the approval queue, and the autonomy dial |
@@ -132,6 +132,8 @@ Without a tour, something has to produce traffic. One person chatting by hand ma
 1. **The viewer**, chatting in the shop front as any customer.
 2. **A customer simulator.** Headless customers played by Claude send realistic messages through the same chat interface real customers use. Started from the console, for example "send 20 customers".
 3. **Seeded cases.** A small library of known-tricky customers that can be fired one at a time from the console. This is not a tour: there is no order and no scripted outcome. It guarantees each concept can be reproduced on demand.
+
+Those three are customer traffic: each message goes through the live shop and is graded by the judge. The healer also makes traces of its own, in a sandbox on a copy of the shop's records, and these never touch the live shop. There are three kinds, each graded a different way: eval trials (graded by the eval case's checks), red team probes (an original message and its paraphrase, compared with each other), and router replays (compared in code with the stronger tier). Once a gate has run, most traces are sandbox ones. The Traces page draws all six sources with a count for each.
 
 ### 4.4 Architecture
 
@@ -270,3 +272,4 @@ How to run it is in `README.md`. This section records what turned out differentl
 - 2026-11-11: Draft 6. Build complete. Added section 7 with what the build found. Router labelling description updated to match what was built. Router training signal reopened as a decision.
 - 2026-11-13: Draft 7. Router decision made (route by risk) and moved to `roadmap.md`. Leftover scaffolding deleted. README cut to the basics and `demo-beats.md` added as a verified walkthrough. Roadmap extended with four proposed items and the defects the walkthrough found.
 - 2026-11-13: First batch of walkthrough defects fixed (see "Done" in `roadmap.md`). The services can now run as a second, isolated copy for testing.
+- 2026-11-15: The console draws a trace's route through the agent graph and the six sources of traces (see "Done" in `roadmap.md`). Section 4.3 now names the three sandbox sources next to the three kinds of customer traffic.

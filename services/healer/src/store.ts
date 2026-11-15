@@ -259,6 +259,17 @@ export class HealerStore {
     return (this.db.prepare(`SELECT COUNT(*) AS n FROM traces WHERE source NOT IN (${SANDBOX_SQL})`).get() as { n: number }).n;
   }
 
+  sandboxTraceCount(): number {
+    return (this.db.prepare(`SELECT COUNT(*) AS n FROM traces WHERE source IN (${SANDBOX_SQL})`).get() as { n: number }).n;
+  }
+
+  traceCountsBySource(): Record<TraceSource, number> {
+    const counts: Record<TraceSource, number> = { shop: 0, simulator: 0, seed: 0, eval: 0, redteam: 0, replay: 0 };
+    const rows = this.db.prepare('SELECT source, COUNT(*) AS n FROM traces GROUP BY source').all() as { source: TraceSource; n: number }[];
+    for (const r of rows) counts[r.source] = r.n;
+    return counts;
+  }
+
   // ── Verdicts and ratings ──
 
   // One verdict per trace: re-judging replaces it.

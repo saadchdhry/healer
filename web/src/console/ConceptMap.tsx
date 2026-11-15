@@ -22,11 +22,11 @@ const pos: Record<BlockId, Box> = {
   context: { x: 28, y: 236, w: 214, h: BH },
   harness: { x: 262, y: 236, w: 214, h: BH },
   model: { x: 496, y: 236, w: 214, h: BH },
-  traces: { x: 24, y: 436, w: 465, h: 100 },
-  evals: { x: 519, y: 436, w: 465, h: 100 },
+  traces: { x: 24, y: 436, w: 465, h: 112 },
+  evals: { x: 519, y: 436, w: 465, h: 112 },
 };
 const surfacesGroup: Box = { x: 12, y: 200, w: 714, h: 156 };
-const foundationsGroup: Box = { x: 12, y: 400, w: 984, h: 148 };
+const foundationsGroup: Box = { x: 12, y: 400, w: 984, h: 160 };
 
 const route: Record<BlockId, string> = {
   run: '/console/run',
@@ -123,7 +123,7 @@ export function ConceptMap({ overview, active, loop }: { overview: Overview | nu
   const c = overview?.counts;
   const promoteHot = active.has('promote');
 
-  const block = (id: BlockId, title: string, count: ReactNode, caption: string, opts: { kind?: 'stage' | 'surface' | 'found'; color?: string; extra?: ReactNode; activeKey?: LoopStage } = {}) => {
+  const block = (id: BlockId, title: string, count: ReactNode, caption: string, opts: { kind?: 'stage' | 'surface' | 'found'; color?: string; extra?: ReactNode; activeKey?: LoopStage; caption2?: string } = {}) => {
     const b = pos[id];
     const isActive = opts.activeKey ? active.has(opts.activeKey) : false;
     const go = () => navigate(route[id]);
@@ -158,7 +158,12 @@ export function ConceptMap({ overview, active, loop }: { overview: Overview | nu
         <text className="t-cap" x={b.x + 16} y={b.y + 58}>
           {caption}
         </text>
-        <text className="t-desc" x={b.x + 16} y={b.y + 80}>
+        {opts.caption2 && (
+          <text className="t-cap" x={b.x + 16} y={b.y + 76}>
+            {opts.caption2}
+          </text>
+        )}
+        <text className="t-desc" x={b.x + 16} y={b.y + (opts.caption2 ? 98 : 80)}>
           {clip(d, Math.floor(b.w / 5.9))}
         </text>
         {opts.extra}
@@ -192,7 +197,7 @@ export function ConceptMap({ overview, active, loop }: { overview: Overview | nu
 
   return (
     <div>
-      <svg className="hc-map" viewBox="0 0 1000 560" role="group" aria-label="The learning loop, live">
+      <svg className="hc-map" viewBox="0 0 1000 572" role="group" aria-label="The learning loop, live">
         <defs>
           <marker id="hc-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
             <path className="arrowhead" d="M1,1 L9,5 L1,9 Z" />
@@ -249,7 +254,7 @@ export function ConceptMap({ overview, active, loop }: { overview: Overview | nu
         {block('context', 'Context', n(c?.contextNotes), 'notes in the live version', { kind: 'surface', color: 'var(--context)', activeKey: 'promote' })}
         {block('harness', 'Harness', overview ? `v${overview.liveVersionId}` : '…', c ? `live, ${c.versions} versions in all` : 'live version', { kind: 'surface', color: 'var(--harness)', activeKey: 'promote' })}
         {block('model', 'Model', liveTier, c ? `${c.routerExamples} router examples` : 'live tier', { kind: 'surface', color: 'var(--model)', activeKey: 'promote' })}
-        {block('traces', 'Traces', n(c?.traces), 'traces recorded, each a full record of one reply', { kind: 'found' })}
+        {block('traces', 'Traces', n(c?.traces), 'customer traces recorded', { kind: 'found', caption2: c ? `plus ${c.sandboxTraces} in sandboxes` : undefined })}
         {block('evals', 'Eval suite', n(c?.evalCases), overview ? `cases. Live version passes ${pct(overview.latestPassRate)}` : 'cases', { kind: 'found' })}
       </svg>
       {listed.length > 0 && (

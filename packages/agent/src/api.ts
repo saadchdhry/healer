@@ -138,6 +138,7 @@ export interface HealerApi {
     never,
     { source?: TraceSource; verdict?: 'pass' | 'fail' | 'pending'; versionId?: number; customerId?: string; limit?: number }
   >;
+  'GET /api/healer/traces/sources': Route<Record<TraceSource, number>>;
   'GET /api/healer/traces/:id': Route<TraceDetail>;
   'GET /api/healer/threads/:id': Route<TraceSummary[]>;
 

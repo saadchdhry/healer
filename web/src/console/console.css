@@ -918,6 +918,14 @@
 .hc-map .blk.found rect.face {
   fill: var(--panel-2);
 }
+.hc-map .blk.is-on rect.face {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+.hc-map .box {
+  fill: var(--panel);
+  stroke: var(--rule);
+}
 .hc-map .blk .band {
   fill: var(--c, var(--ink));
 }
@@ -974,6 +982,20 @@
 }
 .hc-map .arrowhead {
   fill: var(--ink-3);
+}
+.hc-map .edge.taken {
+  stroke: var(--focus);
+  stroke-width: 2;
+}
+.hc-map .arrowhead.taken {
+  fill: var(--focus);
+}
+.hc-map .t-step {
+  font: 500 11px var(--mono);
+  fill: var(--focus);
+}
+.hc-map .t-blocked {
+  fill: var(--fail);
 }
 .hc-map .halo {
   fill: none;

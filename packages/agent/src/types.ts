@@ -485,7 +485,9 @@ export interface Overview {
   settings: Settings;
   activeStages: LoopStage[];
   counts: {
+    // Customer traces only; the healer's own sandbox runs are in sandboxTraces.
     traces: number;
+    sandboxTraces: number;
     verdictsPassed: number;
     verdictsFailed: number;
     issuesOpen: number;

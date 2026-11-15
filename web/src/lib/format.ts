@@ -1,6 +1,15 @@
-import type { ModelConfig, Scope, Tier } from '@healer/agent';
+import type { ModelConfig, Scope, Tier, TraceSource } from '@healer/agent';
 
 export const tierName: Record<Tier, string> = { haiku: 'Haiku 5.5', sonnet: 'Sonnet 5.5', opus: 'Opus 5.5' };
+
+export const sourceWord: Record<TraceSource, string> = {
+  shop: 'Shop front',
+  simulator: 'Simulated customers',
+  seed: 'Seeded cases',
+  eval: 'Eval runs (sandbox)',
+  redteam: 'Red team probes (sandbox)',
+  replay: 'Router replays (sandbox)',
+};
 
 export function usd(n: number): string {
   if (n === 0) return '$0.00';

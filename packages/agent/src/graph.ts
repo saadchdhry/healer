@@ -1,4 +1,4 @@
-import type { GraphShape, Run } from './types.ts';
+import type { GraphShape, Run, Trace } from './types.ts';
 
 export const END = '__end__';
 
@@ -102,4 +102,28 @@ export class Graph<S> {
     if (!edge.targets.some((t) => t.to === to)) throw new Error(`Graph "${this.id}": "${from}" chose undeclared "${to}"`);
     return to;
   }
+}
+
+export type RouteStep =
+  | { n: number; kind: 'edge'; from: string; to: string; label?: string }
+  | { n: number; kind: 'tool'; name: string; blocked: boolean };
+
+// Node runs are recorded in the order they ran, and tool runs hang off the run_tools visit that made them.
+export function traceRoute(trace: Trace, shape: GraphShape): RouteStep[] {
+  const visits = trace.runs.filter((r) => r.kind === 'node');
+  const steps: RouteStep[] = [];
+  const move = (from: string, to: string) => {
+    const label = shape.edges.find((e) => e.from === from && e.to === to)?.label;
+    steps.push({ n: steps.length + 1, kind: 'edge', from, to, ...(label ? { label } : {}) });
+  };
+  visits.forEach((visit, i) => {
+    for (const call of trace.toolCalls) {
+      if (trace.runs.find((r) => r.id === call.runId)?.parentId !== visit.id) continue;
+      steps.push({ n: steps.length + 1, kind: 'tool', name: call.name, blocked: call.blockedByGuard !== null });
+    }
+    const next = visits[i + 1];
+    if (next) move(visit.name, next.name);
+    else if (!visit.error && shape.edges.some((e) => e.from === visit.name && e.to === END)) move(visit.name, END);
+  });
+  return steps;
 }

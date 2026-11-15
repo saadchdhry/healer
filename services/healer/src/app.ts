@@ -226,6 +226,9 @@ export function createHealerApp(options: HealerOptions) {
     return c.json<Res<'GET /api/healer/traces'>>(list.slice(0, q.limit ?? 200));
   });
 
+  // Registered before the :id route, which would otherwise take "sources" as a trace id.
+  app.get('/api/healer/traces/sources', (c) => c.json<Res<'GET /api/healer/traces/sources'>>(store.traceCountsBySource()));
+
   app.get('/api/healer/traces/:id', (c) => {
     const trace = store.trace(c.req.param('id'));
     if (!trace) throw notFound('Trace');
