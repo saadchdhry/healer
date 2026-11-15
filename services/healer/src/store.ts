@@ -21,7 +21,7 @@ import type {
   Verdict,
 } from '@healer/agent';
 
-export const DEFAULT_SETTINGS: Settings = { autonomy: 'approve', trialsPerCase: 3 };
+export const DEFAULT_SETTINGS: Settings = { autonomy: 'approve', trialsPerCase: 3, strictTrials: 10 };
 
 // Traces the healer ran itself, in a sandbox, rather than conversations that reached the shop.
 export const SANDBOX_SOURCES: TraceSource[] = ['eval', 'replay', 'redteam'];

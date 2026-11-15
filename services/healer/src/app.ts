@@ -16,7 +16,7 @@ import {
 import { Healer, MissingKeyError, newId, now } from './console.ts';
 import { startDiagnoseJob } from './diagnose.ts';
 import { caseHistory, startEvalJob } from './evalRunner.ts';
-import { caseValidationSchema, checkSpecSchema } from './evals.ts';
+import { caseValidationSchema, checkSpecSchema, isStrictCase } from './evals.ts';
 import { startGateJob } from './gate.ts';
 import { goldenCases } from './golden.ts';
 import { judgeTrace } from './judge.ts';
@@ -184,10 +184,17 @@ export function createHealerApp(options: HealerOptions) {
   app.get('/api/healer/settings', (c) => c.json<Res<'GET /api/healer/settings'>>(store.settings()));
 
   app.put('/api/healer/settings', async (c) => {
-    const patch = await body(c, z.object({ autonomy: z.enum(['manual', 'approve', 'auto']).optional(), trialsPerCase: z.number().int().min(1).max(9).optional() }));
+    const patch = await body(
+      c,
+      z.object({
+        autonomy: z.enum(['manual', 'approve', 'auto']).optional(),
+        trialsPerCase: z.number().int().min(1).max(9).optional(),
+        strictTrials: z.number().int().min(3).max(20).optional(),
+      }),
+    );
     const settings = { ...store.settings(), ...patch };
     store.setSettings(settings);
-    h.activity(null, `Autonomy ${settings.autonomy}, ${settings.trialsPerCase} trials per eval case`);
+    h.activity(null, `Autonomy ${settings.autonomy}, ${settings.trialsPerCase} trials per eval case, ${settings.strictTrials} for strict cases when the model changes`);
     h.scheduleOverview();
     return c.json<Res<'PUT /api/healer/settings'>>(settings);
   });
@@ -473,6 +480,7 @@ export function createHealerApp(options: HealerOptions) {
       env,
       checks: input.checks as EvalCase['checks'],
       enabled: true,
+      strict: isStrictCase(input.checks as EvalCase['checks'], null),
       validation: null,
     };
     store.evalCases.put(evalCase);
@@ -486,7 +494,13 @@ export function createHealerApp(options: HealerOptions) {
     if (!evalCase) throw notFound('Eval case');
     const patch = await body(
       c,
-      z.object({ title: z.string().min(1).optional(), checks: checksSchema.optional(), enabled: z.boolean().optional(), validation: caseValidationSchema.nullable().optional() }),
+      z.object({
+        title: z.string().min(1).optional(),
+        checks: checksSchema.optional(),
+        enabled: z.boolean().optional(),
+        strict: z.boolean().optional(),
+        validation: caseValidationSchema.nullable().optional(),
+      }),
     );
     const updated = store.evalCases.put({ ...evalCase, ...(patch as Partial<EvalCase>) });
     if (patch.checks) store.markChecksEdited(evalCase.id, now());

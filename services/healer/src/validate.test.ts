@@ -45,6 +45,7 @@ function openedItemCase(checks: EvalCheckSpec[]): EvalCase {
     env: seedSnapshot(),
     checks,
     enabled: true,
+    strict: false,
     validation: null,
   };
 }

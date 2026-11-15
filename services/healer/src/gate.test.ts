@@ -1,18 +1,42 @@
 import assert from 'node:assert/strict';
-import { test } from 'node:test';
-import type { CaseResult, EvalRun } from '@healer/agent';
-import { decide } from './gate.ts';
+import { rmSync } from 'node:fs';
+import { after, test } from 'node:test';
+import {
+  finishModelRun,
+  modelRun,
+  NOTABLE_ORDERS as O,
+  TIER_MODEL_ID,
+  type AgentVersion,
+  type CaseResult,
+  type ChatResult,
+  type EvalRun,
+  type JsonResult,
+  type LlmClient,
+  type LlmContent,
+  type LlmRequest,
+  type Proposal,
+  type TrialResult,
+} from '@healer/agent';
+import type { z } from 'zod';
+import { caseResult, reusableRun, runSuite } from './evalRunner.ts';
+import { decide, gateProposal } from './gate.ts';
+import { goldenCases } from './golden.ts';
+import { setupHealer, waitFor } from './testing.ts';
+
+const dirs: string[] = [];
+after(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
 
 const result = (caseId: string, passed: boolean): CaseResult => ({
   caseId,
   passed,
   passRate: passed ? 1 : 0,
+  rule: 'majority',
   trials: [{ traceId: 't', passed, costUsd: 0.001, checks: passed ? [] : [{ checkId: 'c', kind: 'end_state', label: 'Refunds $42.00', passed: false, detail: 'Expected a refund of $42.00, but the run issued no refund.' }] }],
 });
 
 function run(versionId: number, results: [string, boolean][], costPerTaskUsd = 0.001): EvalRun {
   const r = results.map(([id, p]) => result(id, p));
-  return { id: `er${versionId}`, versionId, status: 'done', startedAt: '', endedAt: '', trialsPerCase: 1, results: r, passRate: r.filter((x) => x.passed).length / r.length, costPerTaskUsd, totalCostUsd: 0 };
+  return { id: `er${versionId}`, versionId, status: 'done', startedAt: '', endedAt: '', trialsPerCase: 1, strictTrials: null, results: r, passRate: r.filter((x) => x.passed).length / r.length, costPerTaskUsd, totalCostUsd: 0 };
 }
 
 const title = (id: string) => `case ${id}`;
@@ -72,4 +96,154 @@ test('a routed candidate is rejected when it sends a capability case to the smal
   assert.equal(ok.decision, 'accept');
   assert.ok(ok.reasons.includes('Routing: all 1 capability case goes to sonnet (router score 0.91).'));
   assert.ok(ok.reasons.includes('Routing share: of the 40 requests in the router dataset, it sends 15 (38%) to sonnet and the other 25 to haiku.'));
+});
+
+const trial = (passed: boolean): TrialResult => ({
+  traceId: 't',
+  passed,
+  costUsd: 0.001,
+  checks: passed ? [] : [{ checkId: 'refund', kind: 'end_state', label: 'Refunds $42.00', passed: false, detail: 'Expected a refund of $42.00, but the run issued RF-0002 of $40.00.' }],
+});
+const strictRun = (versionId: number, results: CaseResult[]): EvalRun => ({ ...run(versionId, []), strictTrials: 10, results });
+
+test('the every-trial rule: 9 of 10 trials fails a strict case, which regresses against 10 of 10, and the reason says what the gate could see', () => {
+  const nine = caseResult('refund', [...Array.from({ length: 9 }, () => trial(true)), trial(false)], 'every');
+  assert.equal(nine.passed, false);
+  assert.equal(caseResult('refund', [...Array.from({ length: 9 }, () => trial(true)), trial(false)], 'majority').passed, true, 'the majority rule would pass it');
+  const ten = caseResult('refund', Array.from({ length: 10 }, () => trial(true)), 'every');
+  const d = decide(strictRun(1, [ten]), strictRun(2, [nine]), null, () => 'Clean refund inside the window', { costFirst: true });
+  assert.equal(d.decision, 'reject');
+  assert.deepEqual(d.regressedCaseIds, ['refund']);
+  assert.ok(
+    d.reasons.includes(
+      'Strict: "Clean refund inside the window" passed 10 of 10 trials on version 1, and failed trial 10 on version 2. A request that fails 1 time in 5 would show at least one failure in 10 trials 89% of the time. In the failing trial, "Refunds $42.00" failed: Expected a refund of $42.00, but the run issued RF-0002 of $40.00.',
+    ),
+    d.reasons.join('\n'),
+  );
+
+  const both = decide(strictRun(1, [ten]), strictRun(2, [ten]), null, () => 'Clean refund inside the window', { costFirst: true });
+  assert.equal(both.decision, 'accept');
+  assert.ok(both.reasons.includes('Strict: "Clean refund inside the window" passed 10 of 10 trials on version 1 and on version 2. A request that fails 1 time in 5 would show at least one failure in 10 trials 89% of the time.'));
+});
+
+test('a strict case that fails on the base cannot regress, and the reasons say the gate could not use it', () => {
+  const stoppedEarly = caseResult('refund', [trial(true), trial(false)], 'every');
+  const ten = caseResult('refund', Array.from({ length: 10 }, () => trial(true)), 'every');
+  const d = decide(strictRun(1, [stoppedEarly]), strictRun(2, [stoppedEarly]), null, () => 'Clean refund', { costFirst: true });
+  assert.equal(d.decision, 'accept');
+  assert.deepEqual(d.regressedCaseIds, []);
+  const reason = d.reasons.find((r) => r.startsWith('Strict:'))!;
+  assert.match(reason, /^Strict: "Clean refund" failed trial 2 on version 1, so its other 8 were skipped, and failed trial 2 on version 2, so its other 8 were skipped\./);
+  assert.match(reason, /Because it already fails on version 1, it counts as failing on the base and cannot regress, so this gate could not use it\./);
+  const fixedByNoise = decide(strictRun(1, [stoppedEarly]), strictRun(2, [ten]), null, () => 'Clean refund').reasons.find((r) => r.startsWith('Strict:'))!;
+  assert.match(fixedByNoise, /cannot regress, so this gate could not use it\. On version 1, "Refunds \$42\.00" failed: Expected a refund of \$42\.00/);
+});
+
+test('the high-stakes rule marks the golden clean refund and cancellation strict, and the status question not', () => {
+  const strict = Object.fromEntries(goldenCases().map((c) => [c.id, c.strict]));
+  assert.deepEqual(strict, { golden_status: false, golden_clean_refund: true, golden_cancel: true, golden_address: false, golden_in_transit: false, golden_greeting: false });
+});
+
+// The agent refunds the watering can and changes Ava's address correctly, except that the small model refunds $40.00
+// on every fifth attempt at the refund: a failure one time in five.
+class FlakyHaikuLlm implements LlmClient {
+  requests: LlmRequest[] = [];
+  haikuRefunds = 0;
+
+  async chat(req: LlmRequest): Promise<ChatResult> {
+    this.requests.push(req);
+    const last = req.messages.at(-1)!;
+    let toolUses: { id: string; name: string; input: Record<string, unknown> }[] = [];
+    const id = `toolu_${crypto.randomUUID()}`;
+    if (typeof last.content === 'string' && last.content.includes('watering can')) {
+      const wrong = req.model === TIER_MODEL_ID.haiku && ++this.haikuRefunds % 5 === 0;
+      toolUses = [{ id, name: 'issue_refund', input: { order_id: O.cleanRefund, amount: wrong ? 40 : 42, method: 'original_payment', reason: 'leaks' } }];
+    } else if (typeof last.content === 'string' && last.content.includes('Clifton')) {
+      toolUses = [{ id, name: 'update_shipping_address', input: { order_id: O.processing, address: '8 Clifton Park Road, Bristol BS8 3HL' } }];
+    }
+    const content: LlmContent = toolUses.length ? toolUses.map((t) => ({ type: 'tool_use' as const, ...t })) : [{ type: 'text', text: 'All done.' }];
+    const run = finishModelRun(modelRun(req, req.role, { system: req.system, messages: req.messages }), { content }, req.model, 1000, 50);
+    return { stopReason: toolUses.length ? 'tool_use' : 'end_turn', text: toolUses.length ? '' : 'All done.', toolUses, content, run };
+  }
+
+  async json<T>(_req: LlmRequest & { schema: z.ZodType<T> }): Promise<JsonResult<T>> {
+    throw new Error('No judge call is expected');
+  }
+}
+
+async function flakyHealer() {
+  const llm = new FlakyHaikuLlm();
+  const h = setupHealer(llm);
+  dirs.push(h.dir);
+  h.start();
+  await waitFor(() => h.healer.shopConnected && h.store.versions.count() === 1);
+  await h.call('PUT', '/api/healer/settings', { trialsPerCase: 3 });
+  for (const c of h.store.evalCases.list()) if (c.id !== 'golden_clean_refund' && c.id !== 'golden_address') await h.call('PATCH', `/api/healer/evals/${c.id}`, { enabled: false });
+  const sonnet = (await h.call<AgentVersion>('POST', '/api/healer/model/tier', { tier: 'sonnet' })).body;
+  return { h, llm, sonnet };
+}
+
+const haikuRefundCalls = (llm: FlakyHaikuLlm) => llm.requests.filter((r) => r.model === TIER_MODEL_ID.haiku && typeof r.messages.at(-1)!.content === 'string' && (r.messages.at(-1)!.content as string).includes('watering can')).length;
+
+test('a tier switch down to haiku that fails a strict case one time in five: the majority rule accepts, the every-trial rule rejects and stops early', async () => {
+  const { h, llm, sonnet } = await flakyHealer();
+  const proposal = (await h.call<Proposal>('POST', '/api/healer/proposals', { title: 'Move to haiku', rationale: 'Cheaper.', changes: [{ surface: 'model', op: 'set_model', model: { ...sonnet.model, tier: 'haiku' } }] })).body;
+
+  // The old rule: three trials per case under a majority.
+  const oldBase = await runSuite(h.healer, sonnet.id);
+  const oldCandidate = await runSuite(h.healer, proposal.candidateVersionId);
+  assert.equal(oldCandidate.strictTrials, null);
+  assert.deepEqual(oldCandidate.results.map((r) => [r.caseId, r.rule, r.trials.length, r.passed]), [['golden_clean_refund', 'majority', 3, true], ['golden_address', 'majority', 3, true]]);
+  assert.equal(decide(oldBase, oldCandidate, null, (id) => id, { costFirst: true }).decision, 'accept');
+
+  // A strict gate cannot reuse the majority result for the strict case, only for the other one.
+  const reuse = reusableRun(h.healer, sonnet.id, true);
+  assert.deepEqual(reuse.missing.map((c) => c.id), ['golden_clean_refund']);
+  assert.deepEqual(reuse.kept.map((r) => r.caseId), ['golden_address']);
+  assert.equal(reuse.prior?.id, oldBase.id);
+
+  const before = haikuRefundCalls(llm);
+  const gate = await gateProposal(h.healer, proposal.id);
+  assert.equal(gate.decision, 'reject', gate.reasons.join('\n'));
+  assert.deepEqual(gate.regressedCaseIds, ['golden_clean_refund']);
+  const base = h.store.evalRuns.get(gate.baseRunId!)!;
+  const candidate = h.store.evalRuns.get(gate.candidateRunId!)!;
+  assert.equal(base.strictTrials, 10);
+  const baseRefund = base.results.find((r) => r.caseId === 'golden_clean_refund')!;
+  assert.deepEqual([baseRefund.rule, baseRefund.trials.length, baseRefund.passed], ['every', 10, true]);
+  assert.equal(base.results.find((r) => r.caseId === 'golden_address')!.trials.length, 3, 'the other case kept its ordinary trials');
+  const refund = candidate.results.find((r) => r.caseId === 'golden_clean_refund')!;
+  assert.equal(refund.rule, 'every');
+  assert.equal(refund.passed, false);
+  assert.ok(refund.trials.length < 10, `stopped after the failed trial, ran ${refund.trials.length}`);
+  assert.equal(haikuRefundCalls(llm) - before, refund.trials.length, 'skipped trials made no model call');
+  const reason = gate.reasons.find((r) => r.startsWith('Strict:'))!;
+  assert.match(reason, new RegExp(`^Strict: "Clean refund inside the window" passed 10 of 10 trials on version ${sonnet.id}, and failed trial \\d+ on version ${proposal.candidateVersionId}, so its other \\d+ were skipped\\.`));
+  assert.match(reason, /A request that fails 1 time in 5 would show at least one failure in 10 trials 89% of the time\./);
+  assert.match(reason, /issued RF-0002 of \$40\.00/);
+
+  // A stopped strict result is reused by the next strict gate; a strict one is not reused by an ordinary run.
+  assert.deepEqual(reusableRun(h.healer, proposal.candidateVersionId, true).missing, []);
+  assert.deepEqual(reusableRun(h.healer, sonnet.id, true).missing, []);
+  assert.equal(reusableRun(h.healer, sonnet.id, false).kept.find((r) => r.caseId === 'golden_clean_refund')!.rule, 'majority');
+  h.close();
+});
+
+test('a context-only proposal runs strict cases with ordinary trials under the majority rule', async () => {
+  const { h, sonnet } = await flakyHealer();
+  const proposal = (await h.call<Proposal>('POST', '/api/healer/proposals', { title: 'A note', rationale: 'Kinder.', changes: [{ surface: 'context', op: 'add', scope: { kind: 'shop' }, text: 'Thank the customer.' }] })).body;
+  const gate = await gateProposal(h.healer, proposal.id);
+  assert.equal(gate.decision, 'accept', gate.reasons.join('\n'));
+  for (const id of [gate.baseRunId!, gate.candidateRunId!]) {
+    const r = h.store.evalRuns.get(id)!;
+    assert.equal(r.strictTrials, null);
+    assert.equal(r.versionId === sonnet.id || r.versionId === proposal.candidateVersionId, true);
+    assert.deepEqual(r.results.map((x) => [x.caseId, x.rule, x.trials.length]), [['golden_clean_refund', 'majority', 3], ['golden_address', 'majority', 3]]);
+  }
+  assert.ok(!gate.reasons.some((r) => r.startsWith('Strict:')));
+  const patched = await h.call<{ strict: boolean }>('PATCH', '/api/healer/evals/golden_clean_refund', { strict: false });
+  assert.equal(patched.body.strict, false, 'a person can switch it off');
+  assert.equal((await h.call('PUT', '/api/healer/settings', { strictTrials: 2 })).status, 400);
+  assert.equal((await h.call<{ strictTrials: number }>('PUT', '/api/healer/settings', { strictTrials: 20 })).body.strictTrials, 20);
+  h.close();
 });

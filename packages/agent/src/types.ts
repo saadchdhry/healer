@@ -363,6 +363,8 @@ export interface EvalCase {
   env: EnvSnapshot;
   checks: EvalCheckSpec[];
   enabled: boolean;
+  // Moves money: a gate that changes the model runs it `Settings.strictTrials` times and passes it only if every trial passes.
+  strict: boolean;
   // How the case was tested before it joined the suite; null for a case never tested.
   validation: CaseValidation | null;
 }
@@ -392,7 +394,8 @@ export interface CaseResult {
   caseId: string;
   trials: TrialResult[];
   passRate: number;
-  // Majority of trials passed.
+  // Under 'majority' most trials passed; under 'every' all did, and the trials stop at the first failure.
+  rule: 'majority' | 'every';
   passed: boolean;
 }
 
@@ -403,6 +406,8 @@ export interface EvalRun {
   startedAt: string;
   endedAt: string | null;
   trialsPerCase: number;
+  // Trials per strict case under the every-trial rule; null when the run used no strict trials.
+  strictTrials: number | null;
   results: CaseResult[];
   passRate: number;
   costPerTaskUsd: number;
@@ -470,6 +475,8 @@ export type Autonomy = 'manual' | 'approve' | 'auto';
 export interface Settings {
   autonomy: Autonomy;
   trialsPerCase: number;
+  // Used only for strict cases, and only when a gate's candidate changes the model.
+  strictTrials: number;
 }
 
 export interface Job {

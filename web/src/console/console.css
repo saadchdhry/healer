@@ -1232,6 +1232,10 @@
 .hc-trials .fail {
   background: var(--fail);
 }
+.hc-trials .skipped {
+  box-sizing: border-box;
+  border: 1px dashed var(--ink-3);
+}
 .hc-figure {
   display: grid;
   gap: 2px;

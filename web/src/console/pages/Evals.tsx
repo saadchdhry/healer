@@ -44,8 +44,8 @@ function HistoryGrid({ views, versionIds }: { views: EvalCaseView[]; versionIds:
                 {!c.enabled && <span className="hc-muted"> (disabled)</span>}
                 {c.validation?.setAside.length ? <span className="hc-muted"> ({c.validation.setAside.length} {c.validation.setAside.length > 1 ? 'checks' : 'check'} set aside)</span> : null}
               </td>
-              <td style={{ padding: '0 8px' }}>
-                <Tag>{originWord[c.origin]}</Tag>
+              <td style={{ padding: '0 8px', whiteSpace: 'nowrap' }}>
+                <Tag>{originWord[c.origin]}</Tag> {c.strict && <Tag>strict</Tag>}
               </td>
               {versionIds.map((v) => {
                 const h = history.find((x) => x.versionId === v);
@@ -279,6 +279,7 @@ export function EvalCasePage() {
   const { id = '' } = useParams();
   const q = useApi('GET /api/healer/evals/:id', [{ params: { id } }], ['evalCase', 'evalRun']);
   const { name } = useCustomers();
+  const { overview } = useConsole();
   const [editing, setEditing] = useState(false);
   const [title, setTitle] = useState('');
   const [checks, setChecks] = useState<EvalCheckSpec[]>([]);
@@ -321,6 +322,25 @@ export function EvalCasePage() {
                       }
                     />
                     {c.enabled ? 'Enabled, runs in every gate' : 'Disabled, skipped by the gate'}
+                  </label>
+                </dd>
+                <dt>Strict</dt>
+                <dd>
+                  <label className="hc-row">
+                    <input
+                      type="checkbox"
+                      checked={c.strict}
+                      disabled={act.busy}
+                      onChange={(e) =>
+                        act.run(async () => {
+                          await call('PATCH /api/healer/evals/:id', { params: { id: c.id }, body: { strict: e.target.checked } });
+                          q.reload();
+                        })
+                      }
+                    />
+                    {c.strict
+                      ? `Moves money: when a change switches the model, it runs ${overview?.settings.strictTrials ?? 'the strict number of'} times and every trial must pass`
+                      : 'Runs like every other case, under the majority rule'}
                   </label>
                 </dd>
               </dl>
@@ -577,7 +597,7 @@ export function EvalRunPage() {
               <span>Pass rate</span>
               <b>{pct(r.passRate)}</b>
               <span>
-                {r.results.filter((x) => x.passed).length} of {r.results.length} cases, {r.trialsPerCase} trials each
+                {r.results.filter((x) => x.passed).length} of {r.results.length} cases, {r.trialsPerCase} trials each{r.strictTrials !== null && `, ${r.strictTrials} for strict cases`}
               </span>
             </div>
             <div className="hc-panel hc-figure">

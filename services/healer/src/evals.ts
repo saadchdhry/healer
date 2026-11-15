@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { roundCents, TOOL_NAMES, type CheckKind, type CheckResult, type EnvSnapshot, type EvalCheckSpec, type ToolName, type Trace } from '@healer/agent';
+import { isHighStakesTool, roundCents, TOOL_NAMES, type CheckKind, type CheckResult, type EnvSnapshot, type EvalCheckSpec, type ToolName, type Trace } from '@healer/agent';
 import type { Healer } from './console.ts';
 import { gradeRubrics, policyChecks } from './judge.ts';
 import { CENT, daysBetween, envChanges, ESCALATION_THRESHOLD, refundableValue, usd } from './policy.ts';
@@ -55,6 +55,17 @@ export const caseValidationSchema = z.object({
   setAside: z.array(z.object({ check: checkSpecSchema, reason: z.string() })),
   flagged: z.array(z.object({ checkId: z.string(), reason: z.string() })),
 });
+
+// Whether a case moves money, by the same idea of high stakes the router's labelling uses: its source trace attempted
+// a refund or a cancellation (blocked or not), or a check expects a refund or a cancelled order.
+export function isStrictCase(checks: EvalCheckSpec[], source: Trace | null): boolean {
+  if (source?.toolCalls.some((c) => isHighStakesTool(c.name))) return true;
+  return checks.some((spec) => {
+    if (spec.kind !== 'end_state') return false;
+    const p = CHECK_PARAMS.end_state.parse(spec.params);
+    return (p.refund !== undefined && 'amount' in p.refund && p.refund.amount > 0) || p.status === 'cancelled';
+  });
+}
 
 // ── Interpreters ──
 
