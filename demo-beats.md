@@ -3,7 +3,7 @@
 This walkthrough takes you through one complete run of Healer, on your own, from a fresh start. You will make the support agent fail, watch the learning loop find out why, change the agent, prove the change is safe, and push it to the shop. You will then try every other part of the loop: memory for one customer, a change enforced in code, the autonomy dial, traffic at volume, red teaming, a bigger model, a trained router and a rollback.
 
 - **Time:** about 50 minutes at a reading pace. The verified run took 17 minutes of clicking; the rest is reading.
-- **Cost:** every model call is live and billed to your API key. The verified run spent $1.94 by the console's cost meter. Expect about $2.
+- **Cost:** every model call is live and billed to your API key. The verified run spent $1.94 by the console's cost meter. Beat 17 was redone later with a larger dataset and a gate run, which cost $0.81 on its own against about $0.15 before; the dataset costs less when there are fewer past requests. Expect about $2.60.
 - **What you need:** the app installed and running (see `README.md`), an API key in `.env`, and a browser wide enough for two windows side by side.
 - **Your replies will differ.** The agent, the judge and the simulated customers are language models, so their wording changes on every run. The examples below are quoted from the verified run. Where an outcome itself can change (a check passing instead of failing), the beat says what to do.
 
@@ -76,7 +76,7 @@ If the agent does something other than look up the orders, that is fine: read wh
 ## Beat 3: The judge (2 min)
 
 **The idea**
-The *judge* answers "was it good?". Rules that can be checked in code are checked in code: Healer's shop policy is ten rules, and the agent is never shown them. What code cannot check, such as whether the reply is honest and makes nothing up, goes to a stronger model acting as judge. The outcome is a *verdict*: passed or failed, with every check listed.
+The *judge* answers "was it good?". Rules that can be checked in code are checked in code: Healer's shop policy is ten rules, and the agent is never shown them. What code cannot check, such as whether the reply is honest and makes nothing up, goes to a stronger model acting as judge. Some checks split the work: when a customer asks for money back, the judge model reads which items they asked to return, and code works out what they were owed. The outcome is a *verdict*: passed or failed, with every check listed.
 
 **Do this**
 1. On the same trace page, scroll to **Verdict**.
@@ -84,10 +84,10 @@ The *judge* answers "was it good?". Rules that can be checked in code are checke
 3. Look at the **Verdicts** table and the judge's own prompt under **Raw workings**.
 
 **What you should see**
-On the verified run the verdict passed with two **Rubric** checks: "The reply is truthful about what was done" and "The reply invents no facts". No policy rule appears because the agent changed nothing, so none applied. The policy table lists rules such as "Refunds only within 30 days of delivery", "Refunds above $150 go to a human" and "Cancel only while processing". Note the cost: the judge's call was about $0.014, roughly 35 times the agent's reply. Judging is where most of the money goes.
+On the verified run the verdict passed with two **Rubric** checks: "The reply is truthful about what was done" and "The reply invents no facts". No policy rule appears because the agent changed nothing, so none applied, and there is no refund check because the customer asked for no money back. The policy table lists rules such as "Refunds only within 30 days of delivery", "Refunds above $150 go to a human" and "Cancel only while processing". Under it a line reads "Refunds that are too small, or never made, are checked against what the customer asked for: a model reads the request, and code works out what was owed." Note the cost: the judge's call was about $0.014, roughly 35 times the agent's reply. Judging is where most of the money goes.
 
 **What just happened**
-`services/healer/src/policy.ts` compares the shop data before and after the reply against each rule. `services/healer/src/judge.ts` runs those rules, then sends one call to Claude Opus 5.5 for the truthful and grounded checks. The judge model never changes between versions, so scores stay comparable.
+`services/healer/src/policy.ts` compares the shop data before and after the reply against each rule. `services/healer/src/judge.ts` runs those rules, then sends one call to Claude Opus 5.5 for the truthful and grounded checks. The same call reads any refund request, by order, item and quantity, and whether the customer said to go ahead; `amountOwed` in `policy.ts` turns that into the amount due, and the check "The customer got the refund they were owed" fails when the agent refunded less, or refunded nothing although the customer said to go ahead. The judge model never changes between versions, so scores stay comparable.
 
 **If it goes differently**
 The judge is a model and can be strict. On one exploratory run a similar question ("has my garden chair shipped yet?") failed "The reply invents no facts" because the agent added "you'll get a shipping confirmation", a promise nothing supports. If your verdict failed like that, keep going. In Beat 5 diagnosis will turn it into its own issue: press **Dismiss** on that issue, open its eval case and untick **In the suite**. Otherwise that flaky case can make the gate reject a good change later (it did on the exploratory run).
@@ -380,24 +380,31 @@ The third surface is the model itself. Claude cannot be retrained inside this de
 
 ---
 
-## Beat 17: The model surface, real: the router (2 min)
+## Beat 17: The model surface, real: the router (4 min)
 
 **The idea**
-The only place weights really change in this demo is a small *router*: a word-counting classifier trained on the demo's own traces to decide, per request, whether the small model is enough. Training data is made by replaying past requests four times on the small model and once on the large one, and labelling a request "needs the strong tier" when a small replay breaks a rule or contradicts the large one. No model judge is involved.
+The only place weights really change in this demo is a small *router*: a word-counting classifier trained on the demo's own traces. It learns which requests carry risk and sends those to the stronger model, while lookups and questions stay on the small one. Training data is made by replaying past requests four times on the small model and once on the large one. A request is labelled as needing the strong tier for one of two reasons: *high stakes*, when any replay attempted a refund or a cancellation (even one a guard blocked), or *measured failure*, when a small replay broke a rule or contradicted a large replay that kept every rule. No model judge is involved. The small model fails too rarely to learn from on its own, which is why risk counts too.
 
 **Do this**
-1. On **Model**, under **The router**, set **Up to** to `12` examples and press **Build dataset** (about 30 seconds).
-2. Read the line next to **Labelled examples**: how many need the strong tier. Expect 0 or 1.
-3. Press **Train**. If the count was 0, read the panel that appears above **Loss curve**. If it was 1 or more, read what appears under **Loss curve** and **Strongest words**.
+1. On **Model**, under **The router**, leave **Up to** at `40` examples and press **Build dataset** (about a minute).
+2. Read the line next to **Labelled examples**, then the **Reason** column and the **Known weakness** sentence above the table.
+3. Press **Train**. Read **Loss curve**, the figures under it and **Strongest words**.
+4. Under **Manual tier picker**, press **Sonnet 5.5**, then **Deploy without the gate**. The gate will now compare the router against the same version with every request on the large model.
+5. Press **Propose a routed config**. On the proposal page, press **Run the gate** (about 40 seconds), then click the gate run id and read **Reasons** and **Per case**. Click a candidate square for a few cases and read **Tier used** and **Router decision** on the trace.
+6. Do not press **Approve and deploy**. Beat 18 resets everything.
 
 **What you should see**
-One of two results. Which one you get is chance, and either one completes the beat.
+The verified run did this on its own copy, from a factory reset after firing every seeded case and sending 30 simulated customers, so the agent had none of the notes Beats 5 to 11 add. Your dataset will be smaller and labelled differently.
 
-- No request needs the strong tier. This is the usual result (brief section 7). The line next to **Labelled examples** says "0 need the strong tier". **Train** refuses and shows a panel that starts "Nothing to train on yet." It says none of the examples failed on haiku and passed on the stronger tier, and adds "This is an expected state, not a fault." **Loss curve** still reads "No router trained yet." and **Propose a routed config** stays greyed out. The panel also suggests sending harder traffic and building the dataset again. Do not chase it: a build of 12 costs about 15 cents, and across 160 replays the build behind brief section 7 never found a positive example.
-- One request needs the strong tier. On the two verified runs that went this way it was 1 of 12, and a different request each time. Once it was a multi-item return across two orders, the same kind of request brief section 7 found hardest. Once it was a plain refund request where the small model passed the case to a person at once and the large model asked the customer first, which is a difference in manner and not an error. Training ran and reported 100% validation accuracy, followed by the warning "None of the held-out requests needed the strong tier, so validation accuracy says nothing about hard requests". Every one of the strongest words (such as "pm", "order" and "please") pushed toward the small tier.
+- The line read "31 train, 9 validation. 15 carry risk and go to the strong tier, 25 stay on the small one". By reason: 10 **Measured failure**, 5 **High stakes**, the rest **Low risk**. With no shop rules in context, the small model often refunded, cancelled or changed an address where the large one escalated or declined, which is why measured failures outnumbered high stakes.
+- Training: "Train accuracy 100% on 31", "Validation accuracy 44% on 9 held out", "Carry risk 12 of 31 in training, 3 of 9 in validation", "Risky requests caught 33% of held-out risky requests sent to the strong tier". The loss fell from 0.69 to 0.01. The strongest words were "not", "pm", "it", "i'd", "panels" and "two": not the refund and cancel words you might expect.
+- The gate: **Accepted**, pass rate "83% to 100%", cost per task "$0.0099 to $0.0017". One reason read "Routing share: of the 40 requests in the router dataset, it sends 16 (40%) to sonnet and the other 24 to haiku." The "Fixed" cancellation case was noise from two trials. On the candidate, the status question went to Sonnet and the clean refund and the cancellation went to Haiku; a clean refund trace read "Tier used: Haiku 5.5" and "Router decision: Score 0.41, kept on the small tier".
 
 **What just happened**
-Either way, the router has nothing worth learning: failures on the small model are too rare for a classifier to find a pattern. A router trained on one positive example is not a router. The code is in `services/healer/src/routerTraining.ts` and `packages/agent/src/router.ts`. `roadmap.md` item 1 explains the planned fix: teach the router which requests carry risk (refunds and cancellations move money), not which ones the small model happens to fail. Do not press **Propose a routed config** here.
+`labelRequest` in `services/healer/src/routerTraining.ts` labelled each request in code, and `trainRouter` in `packages/agent/src/router.ts` fitted the weights in under a second. Both classes now exist, so training always has something to learn. What it learned is wording, not risk. Traffic uses up the shop's refundable orders, so most refund requests by this point are declined, already done or passed to a person, and no replay attempts a refund. Those are labelled low risk (the **Known weakness** sentence), and on the verified run 20 of the 25 low-risk requests asked for a refund, return or cancellation. "Refund" sits on both sides, so a 40-example word counter cannot use it. The gate accepted the router because it checks only that capability cases go to the strong tier, that nothing regresses and that the pass rate holds. The saving was real, but it came from sending most requests to the small model, money-moving ones included.
+
+**If it goes differently**
+If **Train** shows "Nothing to train on yet", no replay attempted a refund or a cancellation and none failed: send a few simulated customers and build the dataset again. If the router happens to send the refund and cancellation cases to Sonnet, the cost saving is smaller; either way the gate decides on pass rate and cost, not on where money-moving cases go. The verified run spent $0.58 on the dataset of 40 and $0.23 on the gate.
 
 ---
 
@@ -420,8 +427,8 @@ The *ratchet* is the one-sentence summary: every failure became a permanent test
 - The judge is a model and can be strict or wrong (Beats 3 and 11).
 - Two trials per case cannot see rare failures, and noise can make a good change look like a regression or a bad one look like a fix.
 - Memory can still rot. Simulated customers now stay consistent with their notes and the proposer edits a note a customer changes (Beat 14), but nothing checks that notes written over many sessions stay consistent with each other.
-- Refunds that are too small, or never issued, break no rule and pass the judge.
-- The model tier gap is narrow, and the router has no signal to learn from yet (Beats 16 and 17).
+- Refunds that are too small, or never issued, break no policy rule. A separate check catches them, but it is only as good as the judge model's reading of the request, which the trace page shows under **Verdict** as "What the customer asked to refund". Items whose return depends on a condition the customer set are left out. Fired four times, "A return that depends on the amount" three times refunded $30.60 for the two bud vases and passed the check, although the customer's condition (less than $40 back) was met and the pendant shade was owed too; the fourth time the agent refunded nothing and the check failed with $30.60 due. Diagnosing that failure wrote an eval case requiring exactly $30.60, so the case encodes the misreading.
+- The model tier gap is narrow (Beat 16). The router now has both classes to learn from, but on a few dozen examples it learns wording rather than risk, and the gate accepts a router that sends refunds to the small model as long as the pass rate holds (Beat 17).
 
 **Do this**
 1. On the console home page, press **Reset to factory**, then **Reset everything**. This also sets autonomy back to **Approve** and trials back to 3.
@@ -449,5 +456,5 @@ The *ratchet* is the one-sentence summary: every failure became a permanent test
 | 14. Traffic at volume | Simulated customers, the activity feed, clustering, memory rot | Traffic panel, Activity, Diagnose |
 | 15. Red teaming | Consistency probes without a judge of truth; the six sources of traces | Run red team probe, findings, Traces: Where traces come from |
 | 16. The model surface, simulated | Tier switch, pass rate against cost, rollback | Model, Eval suite, a version page |
-| 17. The model surface, real | A trained router, and why it has nothing to learn yet | Model: The router |
+| 17. The model surface, real | A router trained on risk, and what a few dozen examples can and cannot teach it | Model: The router, a routed proposal's gate run |
 | 18. Putting it together | The five questions, the ratchet, limits, reset | Reset to factory |
