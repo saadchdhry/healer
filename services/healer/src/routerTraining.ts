@@ -3,7 +3,7 @@ import { Environment, isHighStakesTool, roundCents, runAgent, trainRouter, type 
 import { newId, type Healer } from './console.ts';
 import { pool } from './evalRunner.ts';
 import { policyChecks } from './judge.ts';
-import { envChanges, usd } from './policy.ts';
+import { centsApart, envChanges, usd } from './policy.ts';
 import { createProposal } from './propose.ts';
 
 // The real model surface: a small router trained on the demo's own traces. It learns which requests carry risk and
@@ -88,7 +88,7 @@ export function wrongness(easy: Trace, reference: Trace): string | null {
   for (const [key, w] of writes(easy)) {
     const r = ref.get(key);
     if (!r) return `made a ${key} that the reference did not make`;
-    if (key.startsWith('refund') && (Math.abs(w.amount - r.amount) > 0.01 || w.method !== r.method)) {
+    if (key.startsWith('refund') && (centsApart(w.amount, r.amount) > 1 || w.method !== r.method)) {
       return `refunded ${usd(w.amount)} to ${w.method} where the reference refunded ${usd(r.amount)} to ${r.method}`;
     }
   }

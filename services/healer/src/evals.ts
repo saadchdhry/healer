@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { isHighStakesTool, roundCents, TOOL_NAMES, type CheckKind, type CheckResult, type EnvSnapshot, type EvalCheckSpec, type ToolName, type Trace } from '@healer/agent';
 import type { Healer } from './console.ts';
 import { gradeRubrics, policyChecks } from './judge.ts';
-import { CENT, daysBetween, envChanges, ESCALATION_THRESHOLD, refundableValue, usd } from './policy.ts';
+import { CENT, centsApart, daysBetween, envChanges, ESCALATION_THRESHOLD, refundableValue, usd } from './policy.ts';
 
 // The `params` shape of each check kind an eval case can carry. Validated at the HTTP boundary and on model output.
 
@@ -98,7 +98,7 @@ export function endStateCheck(spec: EvalCheckSpec, trace: Trace): CheckResult {
       else facts.push(`No refund on ${p.orderId}.`);
     } else {
       const methodOk = !p.refund.method || (refunds.length > 0 && refunds.every((r) => r.method === (p.refund as { method: string }).method));
-      if (!refunds.length || Math.abs(total - p.refund.amount) > 0.01 || !methodOk) {
+      if (!refunds.length || centsApart(total, p.refund.amount) > 1 || !methodOk) {
         problems.push(`Expected a refund of ${usd(p.refund.amount)}${p.refund.method ? ` to ${p.refund.method}` : ''} on ${p.orderId}, but the run issued ${got}.`);
       } else facts.push(`Refunded ${usd(total)} on ${p.orderId}${p.refund.method ? ` to ${p.refund.method}` : ''}.`);
     }

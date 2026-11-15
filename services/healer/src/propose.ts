@@ -9,6 +9,7 @@ import {
   type Job,
   type Proposal,
   type Run,
+  type Scope,
   type Tier,
   type ToolName,
 } from '@healer/agent';
@@ -100,6 +101,22 @@ export function applyChanges(base: AgentVersion, changes: Change[], meta: Pick<A
     }
   }
   return v;
+}
+
+// A preference belongs to one customer, so its proposal may change only that customer's notes. Returns why the
+// changes go further, or null. `base` is the version the changes were built on, which has every note they name.
+export function preferenceScopeRefusal(issue: Issue, changes: Change[], base: AgentVersion): string | null {
+  if (issue.kind !== 'preference' || issue.scope.kind !== 'customer') return null;
+  const customerId = issue.scope.customerId;
+  const where = (scope: Scope) => (scope.kind === 'shop' ? 'a shop-wide note' : `a note about customer ${scope.customerId}`);
+  const problems = changes.flatMap((c) => {
+    if (c.surface !== 'context') return [`it changes the ${c.surface} (${c.op})`];
+    const scope = c.op === 'add' ? c.scope : base.context.find((n) => n.id === c.noteId)!.scope;
+    if (scope.kind === 'customer' && scope.customerId === customerId) return [];
+    return [c.op === 'add' ? `it adds ${where(scope)}` : `it ${c.op === 'edit' ? 'edits' : 'removes'} note ${c.noteId}, ${where(scope)}`];
+  });
+  if (!problems.length) return null;
+  return `Refused without running the eval suite: this issue is a preference of customer ${customerId}, so its proposal may only add, edit or remove notes about that customer, but ${problems.join(', and ')}.`;
 }
 
 const TIERS: Tier[] = ['haiku', 'sonnet', 'opus'];
@@ -229,7 +246,7 @@ function previousAttempts(h: Healer, issue: Issue): string {
   if (!rejected.length) return '';
   const attempts = rejected.map((p, i) => {
     const gate = h.store.gateRuns.get(p.gateRunId!)!;
-    return `Attempt ${i + 1}: ${p.title}\nChanges: ${JSON.stringify(p.changes)}\nRejected by the eval gate because:\n${gate.reasons.map((r) => `- ${r}`).join('\n')}`;
+    return `Attempt ${i + 1}: ${p.title}\nChanges: ${JSON.stringify(p.changes)}\nRejected by the gate because:\n${gate.reasons.map((r) => `- ${r}`).join('\n')}`;
   });
   return `\n\n<rejected_attempts>\n${attempts.join('\n\n')}\n</rejected_attempts>\nYour new proposal must fix the issue without repeating what made these fail.`;
 }

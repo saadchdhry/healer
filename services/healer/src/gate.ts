@@ -1,7 +1,7 @@
 import { predictRoute, type CaseResult, type EvalRun, type GateRun, type Job, type Proposal, type Tier } from '@healer/agent';
 import { newId, now, type Healer } from './console.ts';
 import { runSuite } from './evalRunner.ts';
-import { ChangeError, discardProposal, isOpenProposal, proposeAgain } from './propose.ts';
+import { ChangeError, discardProposal, isOpenProposal, preferenceScopeRefusal, proposeAgain } from './propose.ts';
 
 export interface GateDecision {
   decision: 'accept' | 'reject';
@@ -157,43 +157,47 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
   store.proposals.put({ ...proposal, status: 'gating', gateRunId: gateRun.id });
   h.changed('gateRun', 'proposal');
 
-  // A model change alters how reliably the agent acts, so cases that move money must pass every one of many trials.
-  const model = store.versions.get(proposal.candidateVersionId)!.model;
-  const strict = JSON.stringify(store.versions.get(proposal.baseVersionId)!.model) !== JSON.stringify(model);
-  let baseRun: EvalRun;
-  let candidateRun: EvalRun;
-  try {
-    // The base run usually comes back at once from an earlier run of the live version.
-    baseRun = await runSuite(h, proposal.baseVersionId, onProgress, undefined, { strict });
-    gateRun.baseRunId = baseRun.id;
-    store.gateRuns.put(gateRun);
-    candidateRun = await runSuite(h, proposal.candidateVersionId, onProgress, undefined, { strict });
-  } catch (err) {
-    if (store.proposals.get(proposalId)) store.proposals.put({ ...store.proposals.get(proposalId)!, status: 'draft' });
-    throw err;
-  }
-  gateRun.candidateRunId = candidateRun.id;
-
   const issue = proposal.issueId ? store.issues.get(proposal.issueId) : null;
-  const issueCaseIds = issue ? issue.evalCaseIds.filter((id) => store.evalCases.get(id)?.enabled) : null;
-  const costFirst = !issue && proposal.changes.every((c) => c.surface === 'model');
-  const routing: RoutingCheck | null =
-    model.mode === 'routed'
-      ? {
-          easyTier: model.easyTier,
-          hardTier: model.hardTier,
-          cases: store.evalCases
-            .list()
-            .filter((c) => c.enabled && c.issueId && store.issues.get(c.issueId)?.cause === 'capability')
-            .map((c) => ({ caseId: c.id, ...predictRoute(model.router, c.message) })),
-          dataset: { size: store.routerDataset().length, toHard: store.routerDataset().filter((e) => predictRoute(model.router, e.text).needsStrong).length },
-        }
-      : null;
-  const result = decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id, { costFirst, routing });
-  Object.assign(gateRun, result);
+  const refusal = issue && preferenceScopeRefusal(issue, proposal.changes, store.versions.get(proposal.baseVersionId)!);
+  if (refusal) {
+    Object.assign(gateRun, { decision: 'reject', reasons: [refusal] });
+  } else {
+    // A model change alters how reliably the agent acts, so cases that move money must pass every one of many trials.
+    const model = store.versions.get(proposal.candidateVersionId)!.model;
+    const strict = JSON.stringify(store.versions.get(proposal.baseVersionId)!.model) !== JSON.stringify(model);
+    let baseRun: EvalRun;
+    let candidateRun: EvalRun;
+    try {
+      // The base run usually comes back at once from an earlier run of the live version.
+      baseRun = await runSuite(h, proposal.baseVersionId, onProgress, undefined, { strict });
+      gateRun.baseRunId = baseRun.id;
+      store.gateRuns.put(gateRun);
+      candidateRun = await runSuite(h, proposal.candidateVersionId, onProgress, undefined, { strict });
+    } catch (err) {
+      if (store.proposals.get(proposalId)) store.proposals.put({ ...store.proposals.get(proposalId)!, status: 'draft' });
+      throw err;
+    }
+    gateRun.candidateRunId = candidateRun.id;
+
+    const issueCaseIds = issue ? issue.evalCaseIds.filter((id) => store.evalCases.get(id)?.enabled) : null;
+    const costFirst = !issue && proposal.changes.every((c) => c.surface === 'model');
+    const routing: RoutingCheck | null =
+      model.mode === 'routed'
+        ? {
+            easyTier: model.easyTier,
+            hardTier: model.hardTier,
+            cases: store.evalCases
+              .list()
+              .filter((c) => c.enabled && c.issueId && store.issues.get(c.issueId)?.cause === 'capability')
+              .map((c) => ({ caseId: c.id, ...predictRoute(model.router, c.message) })),
+            dataset: { size: store.routerDataset().length, toHard: store.routerDataset().filter((e) => predictRoute(model.router, e.text).needsStrong).length },
+          }
+        : null;
+    Object.assign(gateRun, decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id, { costFirst, routing }));
+  }
   store.gateRuns.put(gateRun);
 
-  const accepted = result.decision === 'accept';
+  const accepted = gateRun.decision === 'accept';
   store.proposals.put({ ...store.proposals.get(proposalId)!, status: accepted ? 'awaiting_approval' : 'rejected' });
   if (!accepted) {
     store.versions.put({ ...store.versions.get(proposal.candidateVersionId)!, status: 'rejected' });
@@ -201,7 +205,7 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
       store.issues.put({ ...issue, status: 'open', updatedAt: now() });
     }
   }
-  h.activity('gate', `${accepted ? 'Accepted' : 'Rejected'} "${proposal.title}": ${result.reasons[0]}`, { kind: 'gateRun', id: gateRun.id, label: result.decision });
+  h.activity('gate', `${accepted ? 'Accepted' : 'Rejected'} "${proposal.title}": ${gateRun.reasons[0]}`, { kind: 'gateRun', id: gateRun.id, label: gateRun.decision });
   h.changed('gateRun', 'proposal', 'version', 'issue', 'evalRun');
   // A version was promoted while this gate ran, so the acceptance is against a version that is no longer live.
   if (accepted && store.liveVersion()!.id !== proposal.baseVersionId) reproposeOnLive(h, [store.proposals.get(proposalId)!]);

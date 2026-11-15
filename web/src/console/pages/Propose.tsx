@@ -169,7 +169,7 @@ export function ProposalPage() {
         const job = jobs.find((j) => j.kind === 'gate' && j.refId === p.id && (j.status === 'running' || p.status === 'gating'));
         const canGate = p.status === 'draft';
         const canApprove = p.status === 'awaiting_approval';
-        const canDiscard = p.status !== 'promoted' && p.status !== 'discarded';
+        const canDiscard = p.status === 'draft' || p.status === 'awaiting_approval';
         return (
           <>
             <PageHead title={p.title} crumb={<><Link to="/console/propose">Propose</Link> <span className="mono">{p.id}</span></>}>

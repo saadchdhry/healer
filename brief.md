@@ -115,7 +115,7 @@ Every deep dive has three layers: what the stage is (two or three sentences), it
 | Judge | The verdict on each trace: which check failed (answer criteria, end state of the database, tool sequence), any customer rating, and the judge's own prompt and reasoning |
 | Diagnose | Failures clustered into issues. Each issue names a cause (knowledge, process, or capability) and the surface and scope it points at |
 | Propose | Proposed changes as diffs, the approval queue, and the autonomy dial |
-| Gate | Each candidate version run against the whole eval suite in a sandbox: pass rate before and after, results per case, cost per task, accepted or rejected |
+| Gate | Each candidate version run against the whole eval suite in a sandbox: pass rate before and after, results per case, cost per task, accepted or rejected. A proposal for one customer's preference that changes anything but that customer's notes is rejected without running the suite |
 | Context | Memory by scope (shop-wide and per customer), with version history and diffs |
 | Harness | System prompt and tool definitions, with version history and diffs |
 | Model | The current tier with a manual picker, the router's training set, loss curve, held-out accuracy, and weights versions |
@@ -279,3 +279,4 @@ How to run it is in `README.md`. This section records what turned out differentl
 - 2026-11-15: The router now learns which requests carry risk, with a reason recorded per example (see "Done" in `roadmap.md`). Sections 4.5, 5 and 7 describe the new labelling and what its live run found: both classes appear, but the router learned wording rather than risk.
 - 2026-11-15: A new eval case is tested before it joins the suite: against shop policy in code, on its source trace, and on a reference agent shown every rule that is never deployed (see "Done" in `roadmap.md`). The known limits about over-strict checks and the owed-refund check in section 7, and the Eval suite row in section 4, describe it.
 - 2026-11-15: Cases that move money are strict: when a change switches the model they run ten times on each side under the every-trial rule, and the gate says what that could see (see "Done" in `roadmap.md`). Sections 3.5, 4.5 and 7 describe it and its limits.
+- 2026-11-15: Three small defects fixed (see "Done" in `roadmap.md`): Discard is enabled only where the server accepts it, an `end_state` refund check allows a difference of one cent, and a proposal for one customer's preference that changes anything but that customer's notes is rejected without running the suite. The Gate row in section 4 says so.

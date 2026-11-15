@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { factoryVersion, type AgentVersion } from '@healer/agent';
-import { applyChanges, ChangeError, changeSchema, nextTier } from './propose.ts';
+import { factoryVersion, type AgentVersion, type Issue } from '@healer/agent';
+import { applyChanges, ChangeError, changeSchema, nextTier, preferenceScopeRefusal } from './propose.ts';
 
 const meta = { id: 1, author: 'loop' as const, summary: 's', proposalId: 'prop_1', issueId: 'iss_1' };
 
@@ -54,4 +54,33 @@ test('change schema validates hand-written changes', () => {
   assert.equal(changeSchema.safeParse({ surface: 'context', op: 'add', scope: { kind: 'customer' }, text: 'x' }).success, false);
   assert.equal(changeSchema.safeParse({ surface: 'harness', op: 'set_tool', name: 'teleport' }).success, false);
   assert.equal(changeSchema.safeParse({ surface: 'model', op: 'set_model', model: { mode: 'fixed', tier: 'giant', effort: 'low' } }).success, false);
+});
+
+test('a preference proposal may change only notes about its own customer', () => {
+  const marcus = { kind: 'customer' as const, customerId: 'c_marcus' };
+  const base: AgentVersion = {
+    ...factoryVersion(),
+    context: [
+      { id: 'note_shop', scope: { kind: 'shop' }, text: 'Refunds within 30 days.', addedInVersion: 0, issueId: null },
+      { id: 'note_marcus', scope: marcus, text: 'Call him Marcus.', addedInVersion: 0, issueId: null },
+      { id: 'note_ava', scope: { kind: 'customer', customerId: 'c_ava' }, text: 'Call her Ava.', addedInVersion: 0, issueId: null },
+    ],
+  };
+  const preference = { kind: 'preference', scope: marcus } as Issue;
+  const refusal = (changes: Parameters<typeof preferenceScopeRefusal>[1], issue = preference) => preferenceScopeRefusal(issue, changes, base);
+
+  assert.equal(refusal([{ surface: 'context', op: 'add', scope: marcus, text: 'Call him Marc.' }]), null);
+  assert.equal(refusal([{ surface: 'context', op: 'edit', noteId: 'note_marcus', text: 'Call him Marc.' }]), null);
+  assert.equal(refusal([{ surface: 'context', op: 'remove', noteId: 'note_marcus' }]), null);
+
+  assert.equal(
+    refusal([{ surface: 'context', op: 'edit', noteId: 'note_marcus', text: 'Call him Marc.' }, { surface: 'context', op: 'edit', noteId: 'note_shop', text: 'Refunds within 30 days of delivery.' }]),
+    'Refused without running the eval suite: this issue is a preference of customer c_marcus, so its proposal may only add, edit or remove notes about that customer, but it edits note note_shop, a shop-wide note.',
+  );
+  assert.match(refusal([{ surface: 'context', op: 'remove', noteId: 'note_ava' }])!, /but it removes note note_ava, a note about customer c_ava\.$/);
+  assert.match(refusal([{ surface: 'context', op: 'add', scope: { kind: 'shop' }, text: 'x' }])!, /but it adds a shop-wide note\.$/);
+  assert.match(refusal([{ surface: 'harness', op: 'set_system_prompt', systemPrompt: 'x' }, { surface: 'model', op: 'set_model', model: base.model }])!, /but it changes the harness \(set_system_prompt\), and it changes the model \(set_model\)\.$/);
+
+  const failure = { kind: 'failure', scope: marcus } as Issue;
+  assert.equal(refusal([{ surface: 'context', op: 'edit', noteId: 'note_shop', text: 'x' }], failure), null, 'only preference issues are held to their customer');
 });
