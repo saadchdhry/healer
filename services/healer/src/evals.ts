@@ -54,6 +54,21 @@ export const caseValidationSchema = z.object({
   caughtBy: z.array(z.string()),
   setAside: z.array(z.object({ check: checkSpecSchema, reason: z.string() })),
   flagged: z.array(z.object({ checkId: z.string(), reason: z.string() })),
+  stability: z
+    .object({
+      versionId: z.number().int(),
+      traceIds: z.array(z.string()),
+      checks: z.array(
+        z.object({
+          checkId: z.string(),
+          label: z.string(),
+          kind: z.enum(['invariant', 'end_state', 'tool_sequence', 'exact_match', 'rubric']),
+          passed: z.array(z.boolean()),
+          regraded: z.array(z.boolean()).nullable(),
+        }),
+      ),
+    })
+    .optional(),
 });
 
 // Whether a case moves money, by the same idea of high stakes the router's labelling uses: its source trace attempted

@@ -66,7 +66,9 @@ test('validateCase: a policy conflict and a rubric failing both reference runs a
     .push({ text: 'I can refund $59.40.' })
     .pushJson(graded(['items', false], ['sorry', false]))
     .push({ text: 'I can refund $59.40.' })
-    .pushJson(graded(['items', false], ['sorry', true]));
+    .pushJson(graded(['items', false], ['sorry', true]))
+    .push(...Array.from({ length: 4 }, () => ({ text: 'Sorry, I can refund $59.40.' })))
+    .pushJson(...Array.from({ length: 4 }, () => graded(['sorry', true])));
   const h = await healerWith(llm);
   const source = makeTrace('c_tom', (e) => e.addRefund(O.openedItem, 66, 'original_payment', 'opened'));
   const checks = [
@@ -90,9 +92,16 @@ test('validateCase: a policy conflict and a rubric failing both reference runs a
   assert.equal(v.referenceTraceIds.length, 2);
   assert.ok(v.referenceTraceIds.every((id) => h.store.trace(id)?.tierUsed === 'sonnet'));
 
+  assert.deepEqual(v.stability!.checks.map((c) => [c.checkId, c.passed, c.regraded]), [
+    ['policy', [true, true, true, true], null],
+    ['sorry', [true, true, true, true], null],
+    ['c4', [true, true, true, true], null],
+  ]);
+  assert.equal(v.stability!.traceIds.length, 4);
+
   const agentCalls = llm.requests.filter((r) => r.role === 'agent');
-  assert.equal(agentCalls.length, 2);
-  for (const r of agentCalls) {
+  assert.equal(agentCalls.length, 6);
+  for (const r of agentCalls.slice(0, 2)) {
     assert.equal(r.model, TIER_MODEL_ID.sonnet);
     for (const rule of POLICY_RULES) assert.ok(r.system.includes(rule.description), `the reference agent is shown "${rule.label}"`);
   }
@@ -101,13 +110,15 @@ test('validateCase: a policy conflict and a rubric failing both reference runs a
   assert.ok(lines.includes(`Set aside a check from 'Refund on opened items': "The reply lists every item's amount" failed on both reference runs (It did not do items).`));
   assert.ok(lines.includes(`Flagged a check from 'Refund on opened items': "The reply apologises" failed on one of the 2 reference runs (It did not do sorry).`));
   assert.ok(lines.includes(`Tested 'Refund on opened items' on the reference agent (sonnet, shown every shop rule): 2 of 2 runs kept every policy rule`));
+  assert.ok(lines.includes(`Ran 'Refund on opened items' 4 times on version 0 to see whether its checks hold steady: every check gave the same result on every run`));
   assert.ok(lines.includes(`'Refund on opened items' catches the failure it came from: "Every shop policy rule holds" fails on the source trace`));
+  assert.ok(!lines.some((l) => l.includes('Version 0 passed it')), 'a stable case adds nothing to set aside or flag');
   h.close();
 });
 
 test('validateCase: a case that passes on its source does not catch it; runs that break a rule do not count; policy is never set aside', async () => {
   const refund = { toolUses: [{ name: 'issue_refund', input: { order_id: O.openedItem, amount: 66, method: 'original_payment', reason: 'opened' } }] };
-  const llm = new ScriptedLlm().push(refund, { text: 'Refunded $66.00.' }, refund, { text: 'Refunded $66.00.' });
+  const llm = new ScriptedLlm().push(refund, { text: 'Refunded $66.00.' }, refund, { text: 'Refunded $66.00.' }, ...Array.from({ length: 4 }, () => ({ text: 'Let me check.' })));
   const h = await healerWith(llm);
   const checks = [policy, { id: 'none', kind: 'end_state', label: 'No refund', params: { orderId: O.openedItem, refund: { none: true } } }] satisfies EvalCheckSpec[];
   const tested = await validateCase(h.healer, openedItemCase(checks), makeTrace('c_tom', () => {}));
@@ -120,10 +131,56 @@ test('validateCase: a case that passes on its source does not catch it; runs tha
   assert.ok(lines.includes(`Tested 'Refund on opened items' on the reference agent (sonnet, shown every shop rule): neither run kept every policy rule, so the runs set aside no check`));
   assert.ok(lines.includes(`'Refund on opened items' does not catch the failure it came from: every check it keeps passes on the source trace`));
 
-  llm.push({ text: 'Let me check.' }, { text: 'Let me check.' });
+  llm.push(...Array.from({ length: 6 }, () => ({ text: 'Let me check.' })));
   const noSource = await validateCase(h.healer, openedItemCase([policy]), null);
   assert.equal(noSource.validation!.catchesSource, null);
   assert.deepEqual(noSource.checks, [policy]);
+  h.close();
+});
+
+test('validateCase: across four live runs, a rubric the grader scores differently on the same reply is set aside; a rubric or code check that flips with the agent is flagged and kept; policy is never touched', async () => {
+  const refund = { toolUses: [{ name: 'issue_refund', input: { order_id: O.openedItem, amount: 66, method: 'original_payment', reason: 'opened' } }] };
+  const llm = new ScriptedLlm()
+    .push({ text: 'Sorry, I can refund $59.40.' }, { text: 'Sorry, I can refund $59.40.' })
+    .pushJson(graded(['tone', true], ['amounts', true]), graded(['tone', true], ['amounts', true]))
+    .push({ text: 'Sorry, I can refund $59.40.' }, refund, { text: 'Refunded $66.00.' }, { text: 'Sorry, I can refund $59.40.' }, { text: 'I can refund $59.40.' })
+    .pushJson(graded(['tone', true], ['amounts', true]), graded(['tone', false], ['amounts', false]), graded(['tone', true], ['amounts', true]), graded(['tone', true], ['amounts', false]))
+    .pushJson(graded(['tone', true], ['amounts', true]), graded(['tone', true], ['amounts', false]), graded(['tone', true], ['amounts', true]), graded(['tone', true], ['amounts', false]));
+  const h = await healerWith(llm);
+  const checks = [
+    policy,
+    rubric('tone', 'The reply is polite'),
+    rubric('amounts', 'The reply gives the refundable amount'),
+    { id: 'sorry', kind: 'exact_match', label: 'Says sorry', params: { contains: 'sorry' } },
+  ] satisfies EvalCheckSpec[];
+  const tested = await validateCase(h.healer, openedItemCase(checks), null);
+  const v = tested.validation!;
+  const stable = v.stability!;
+
+  assert.deepEqual(tested.checks.map((c) => c.id), ['policy', 'amounts', 'sorry']);
+  assert.deepEqual(v.setAside.map((s) => s.check.id), ['tone']);
+  assert.equal(
+    v.setAside[0]!.reason,
+    `The grader gave two different results for the same reply: on trace ${stable.traceIds[1]} it failed the first time and passed the second.`,
+  );
+  const kept = "passed it on 2 of 4 runs: what the agent does varies from run to run, while the check gives the same result for the same reply.";
+  assert.deepEqual(v.flagged, [
+    { checkId: 'amounts', reason: `Version 0 ${kept}` },
+    { checkId: 'sorry', reason: `Version 0 ${kept}` },
+  ]);
+  const policyRow = stable.checks.find((c) => c.checkId === 'policy')!;
+  assert.deepEqual(policyRow.passed, [true, false, true, true], 'the policy invariant flipped on the live runs');
+  assert.ok(!v.flagged.some((f) => f.checkId === 'policy') && !v.setAside.some((s) => s.check.id === 'policy'));
+  assert.deepEqual(stable.checks.find((c) => c.checkId === 'amounts')!.regraded, [true, false, true, false]);
+  assert.equal(stable.checks.find((c) => c.checkId === 'sorry')!.regraded, null, 'a code check is never graded twice');
+
+  const live = llm.requests.filter((r) => r.role === 'agent').slice(2);
+  assert.ok(live.every((r) => !r.system.includes(POLICY_RULES[0]!.description)), 'the stability runs use the live version, not the reference one');
+  assert.equal(llm.requests.filter((r) => r.role === 'judge').length, 10, 'two reference grades, four first grades and four second grades');
+  const lines = h.store.activity.latest(30).map((a) => a.text);
+  assert.ok(lines.includes(`Set aside a check from 'Refund on opened items': "The reply is polite" the grader gave two different results for the same reply: on trace ${stable.traceIds[1]} it failed the first time and passed the second.`));
+  assert.ok(lines.includes(`Flagged a check from 'Refund on opened items': "Says sorry" version 0 ${kept}`));
+  assert.ok(lines.includes(`Ran 'Refund on opened items' 4 times on version 0 to see whether its checks hold steady: 3 of 3 checks besides shop policy gave different results on different runs`));
   h.close();
 });
 
@@ -206,7 +263,9 @@ test('loop: a set-aside check does not block a fix the remaining checks accept; 
 
   // The rule note was shown to the reference runs and to nothing else.
   const ruleText = POLICY_RULES[0]!.description;
-  assert.ok(llm.requests.some((r) => r.role === 'agent' && r.system.includes(ruleText)));
+  assert.equal(llm.requests.filter((r) => r.role === 'agent' && r.system.includes(ruleText)).length, 2, 'only the two reference runs');
+  assert.equal(evalCase.validation!.stability!.versionId, 0);
+  for (const id of evalCase.validation!.stability!.traceIds) assert.equal(h.store.trace(id)!.versionId, 0, 'the stability runs used the stored live version');
   for (const r of llm.requests.filter((r) => r.role !== 'agent')) assert.ok(!JSON.stringify(r).includes(ruleText), `the ${r.role} call never sees the rule note`);
   for (const v of h.store.versions.list()) assert.ok(!v.context.some((n) => n.id === REFERENCE_NOTE_ID || n.text.includes(ruleText)), `version ${v.id} has no rule note`);
   for (const p of h.store.proposals.list() as Proposal[]) assert.ok(!JSON.stringify(p).includes(ruleText));

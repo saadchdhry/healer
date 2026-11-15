@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
-import type { CheckKind, EvalCase, EvalCheckSpec } from '@healer/agent';
+import type { CaseStability, CheckKind, EvalCase, EvalCheckSpec } from '@healer/agent';
 import type { EvalCaseView } from '@healer/agent';
 import { call } from '../../lib/api.ts';
 import { useAction, useApi } from '../../lib/hooks.ts';
@@ -461,6 +461,69 @@ const referenceAgent = 'A stronger model that is shown every shop rule. It is us
 const validationWeakness =
   'Two reference runs can miss a check that is too strict only some of the time. A rubric is graded by a model, so a rubric check can be set aside because the grader was wrong, and the reference agent is still a model, so on the hardest requests it can fail a correct check. That is why failing one run in two only flags a check, and why a check set aside stays here and can be put back. The test against shop policy covers only end state checks; tool sequences and rubrics are tested only by the reference runs.';
 
+const stabilityWeakness =
+  'Four runs see a check that flips one time in five only about 59% of the time (1 minus 0.8 to the fourth, minus 0.2 to the fourth, the chance that the runs neither all pass nor all fail), so a steady result here does not prove a steady check. A rubric set aside because the grader disagreed with itself is judged on one extra grade per reply, so a grader that is wrong the same way twice is not caught.';
+
+function Squares({ results, traceIds, what }: { results: boolean[]; traceIds: string[]; what: string }) {
+  return (
+    <span className="hc-trials">
+      {results.map((passed, i) => (
+        <Link key={i} to={`/console/traces/${traceIds[i]}`} className={passed ? 'pass' : 'fail'} title={`Run ${i + 1}, ${what}: ${passed ? 'passed' : 'failed'}. Open trace ${traceIds[i]}`} aria-label={`Run ${i + 1} ${what} ${passed ? 'passed' : 'failed'}`} />
+      ))}
+    </span>
+  );
+}
+
+function StabilityPanel({ s }: { s: CaseStability | undefined }) {
+  return (
+    <div className="hc-panel">
+      <h3>Run several times on the live version</h3>
+      {!s ? (
+        <p className="hc-muted">Tested before cases were run on the live version for stability. Test this case again to run it.</p>
+      ) : (
+        <>
+          <p className="hc-muted">
+            Ran {s.traceIds.length} times on <IdLink kind="version" id={s.versionId} />. A check that gives different results on different runs is flagged when the agent did something different, and set aside
+            when the grader gave a different result for the same reply. Shop policy is never set aside or flagged.
+          </p>
+          <table className="hc-table">
+            <tbody>
+              {s.checks.map((c) => {
+                const passes = c.passed.filter(Boolean).length;
+                return (
+                  <tr key={c.checkId}>
+                    <td>
+                      <Tag>{checkKindWord[c.kind]}</Tag>
+                    </td>
+                    <td>{c.label}</td>
+                    <td>
+                      <div className="hc-stack" style={{ gap: 4 }}>
+                        <Squares results={c.passed} traceIds={s.traceIds} what="first grade" />
+                        {c.regraded && (
+                          <span className="hc-row" style={{ gap: 8 }}>
+                            <Squares results={c.regraded} traceIds={s.traceIds} what="graded again" />
+                            <span className="hc-muted" style={{ fontSize: 12 }}>
+                              graded again
+                            </span>
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="hc-muted" style={{ fontSize: 12.5 }}>
+                      {passes === 0 || passes === c.passed.length ? 'the same on every run' : `passed ${passes} of ${c.passed.length}`}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </>
+      )}
+      <p className="hc-muted">{stabilityWeakness}</p>
+    </div>
+  );
+}
+
 function ValidationLayer({ c, reload }: { c: EvalCase; reload: () => void }) {
   const { jobs, trackJob } = useConsole();
   const act = useAction();
@@ -483,7 +546,7 @@ function ValidationLayer({ c, reload }: { c: EvalCase; reload: () => void }) {
         </div>
       )}
       {!v ? (
-        <Empty>Not tested yet. A case diagnosis writes is tested before it joins the suite; test this one to check it against shop policy, its source trace and the reference agent.</Empty>
+        <Empty>Not tested yet. A case diagnosis writes is tested before it joins the suite; test this one to check it against shop policy, its source trace, the reference agent and repeated runs on the live version.</Empty>
       ) : (
         <div className="hc-stack">
           <div className="hc-panel">
@@ -558,8 +621,8 @@ function ValidationLayer({ c, reload }: { c: EvalCase; reload: () => void }) {
             <h3>Flagged</h3>
             {v.flagged.length ? (
               <ul>
-                {v.flagged.map((f) => (
-                  <li key={f.checkId}>
+                {v.flagged.map((f, i) => (
+                  <li key={i}>
                     {label(f.checkId)}: <span className="hc-muted">{f.reason} It stays in the case.</span>
                   </li>
                 ))}
@@ -568,6 +631,7 @@ function ValidationLayer({ c, reload }: { c: EvalCase; reload: () => void }) {
               <p className="hc-muted">No check was flagged.</p>
             )}
           </div>
+          <StabilityPanel s={v.stability} />
         </div>
       )}
       <p className="hc-muted">{validationWeakness}</p>
