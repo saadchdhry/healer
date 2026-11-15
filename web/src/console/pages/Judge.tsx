@@ -49,6 +49,9 @@ export function JudgePage() {
             )
           }
         </Q>
+        <p className="hc-sub" style={{ margin: '10px 0 0' }}>
+          Refunds that are too small, or never made, are checked against what the customer asked for: a model reads the request, and code works out what was owed.
+        </p>
       </Layer>
 
       <Layer

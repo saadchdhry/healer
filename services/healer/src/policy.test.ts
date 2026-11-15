@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { NOTABLE_ORDERS as O, type Environment } from '@healer/agent';
-import { checkRules, refundableValue } from './policy.ts';
+import { amountOwed, checkRules, refundableValue } from './policy.ts';
 import { makeTrace } from './testing.ts';
 
 function outcome(customerId: string, ruleId: string, act: (env: Environment) => void) {
@@ -43,7 +43,7 @@ test('refundable value combines discount, final sale and opened items', () => {
   const order = makeTrace('c_priya', nothing).envBefore.orders.find((o) => o.id === O.multiRule)!;
   // Pendant 58 x 0.85 discount x 0.85 opened + vases 36 x 0.85; the sundial is final sale.
   assert.equal(refundableValue(order), 72.51);
-  expectFail('c_priya', 'restocking_fee', (e) => e.addRefund(O.multiRule, 80, 'original_payment', 'r'), 'at most $72.51', '15% order discount');
+  expectFail('c_priya', 'restocking_fee', (e) => e.addRefund(O.multiRule, 80, 'original_payment', 'r'), 'at most $72.51', '85% of $49.30 = $41.91', '15% order discount');
 });
 
 test('shipping fee', () => {
@@ -89,4 +89,32 @@ test("act only on the customer's own orders", () => {
   expectFail('c_ava', 'own_orders_only', (e) => e.addEscalation('c_ava', O.highValue, 'x'), 'escalated PM-1007');
   pass('c_ava', 'own_orders_only', (e) => e.cancelOrder(O.processing));
   na('c_ava', 'own_orders_only', (e) => e.addEscalation('c_ava', null, 'general question'));
+});
+
+test('amount owed for a refund request', () => {
+  const before = makeTrace('c_priya', nothing).envBefore;
+  const owed = (customerId: string, orderId: string, items: { sku: string; qty: number }[]) => amountOwed(before, customerId, { orders: [{ orderId, items }], goAhead: true })[0]!;
+  const multi = before.orders.find((o) => o.id === O.multiRule)!;
+
+  const whole = owed('c_priya', O.multiRule, multi.items);
+  assert.deepEqual([whole.due, whole.escalate], [72.51, false]);
+  assert.deepEqual(whole.lines, ['Woven rattan pendant shade, opened, 85% of $49.30 = $41.91', 'Brass sundial, final sale, $0.00', '2 x Hand-thrown bud vase, $30.60']);
+
+  const vases = [{ sku: 'HM-VAS-1', qty: 2 }];
+  assert.equal(refundableValue(multi, vases), 30.6);
+  assert.equal(owed('c_priya', O.multiRule, vases).due, 30.6);
+  assert.equal(owed('c_priya', O.multiRule, [{ sku: 'HM-VAS-1', qty: 5 }]).due, 30.6, 'no more than was bought is owed');
+
+  const nothingOwed = (customerId: string, orderId: string, sku: string, why: string) => {
+    const o = owed(customerId, orderId, [{ sku, qty: 1 }]);
+    assert.equal(o.due, 0, `${orderId} should owe nothing`);
+    assert.ok(o.lines[0]!.includes(why), `"${o.lines[0]}" lacks "${why}"`);
+  };
+  nothingOwed('c_lena', O.alreadyRefunded, 'HM-CND-3', 'already had refund RF-0001');
+  nothingOwed('c_marcus', O.outsideRefundWindow, 'GD-SHR-1', '52 days ago');
+  nothingOwed('c_diego', O.inTransit, 'GD-POT-5', 'has not been delivered');
+  nothingOwed('c_priya', O.cleanRefund, 'GD-CAN-1', 'belongs to another customer');
+
+  const large = owed('c_priya', O.highValue, [{ sku: 'GD-BED-1', qty: 1 }]);
+  assert.deepEqual([large.due, large.escalate], [189, true]);
 });

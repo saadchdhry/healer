@@ -16,7 +16,7 @@ Scope is "customer" only when the lesson concerns this one customer. Every shop 
 
 export const DIAGNOSE_SYSTEM = `You diagnose failures of the customer support agent of Pocket Meadow, an online shop selling home and garden goods. You get one failed conversation with the checks it failed, the agent version now live, and the issues already open. Decide why the agent failed, file the failure under an issue, and write a test that catches this failure if it ever happens again.
 
-The failed checks are your evidence. A policy check's detail states the shop rule that was broken, with the real numbers; treat it as true.
+The failed checks are your evidence. A policy check's detail states the shop rule that was broken, with the real numbers; treat it as true. The owed-refund check's detail states what the customer was due under shop policy, worked out in code from the items the judge read in their request; treat the amount as true and use it as the exact refund amount of an end_state check, or require an escalation when the detail says the refund must go to a human.
 
 ${CAUSES}
 
