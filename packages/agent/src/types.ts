@@ -284,6 +284,13 @@ export interface Verdict {
   passed: boolean;
   checks: CheckResult[];
   judgeRun: Run | null;
+  // What the judge model read as the customer's request for money back; null when there was none or the judge was not called.
+  refundRequest: RefundRequest | null;
+}
+
+export interface RefundRequest {
+  orders: { orderId: string; items: { sku: string; qty: number }[] }[];
+  goAhead: boolean;
 }
 
 // ── Diagnosis and proposals ───────────────────────────────────────────────

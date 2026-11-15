@@ -60,7 +60,7 @@ class FakeLlm implements LlmClient {
     let value: unknown;
     if (req.role === 'judge' && req.system === JUDGE_SYSTEM) {
       const ok = { detail: 'Fine.', passed: true };
-      value = { truthful: ok, grounded: ok, customer_notes: { applicable: false, detail: 'No notes.', passed: true }, preferences: [] };
+      value = { truthful: ok, grounded: ok, customer_notes: { applicable: false, detail: 'No notes.', passed: true }, refund_request: null, preferences: [] };
     } else if (req.role === 'judge') {
       value = { results: [...message.matchAll(/^- \[(\w+)\]/gm)].map((m) => ({ id: m[1], detail: 'Met.', passed: true })) };
     } else if (req.role === 'diagnose') {
@@ -237,6 +237,7 @@ class PreferenceJudge extends FakeLlm {
       truthful: ok,
       grounded: ok,
       customer_notes: { applicable: false, detail: 'No notes.', passed: true },
+      refund_request: null,
       preferences: [{ said: 'call me Marc', note: 'Prefers to be called Marc.' }],
     });
     return { value, run: finishModelRun(modelRun(req, req.role, {}), value, req.model, 10, 10) };

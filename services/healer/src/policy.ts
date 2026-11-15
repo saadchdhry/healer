@@ -1,4 +1,4 @@
-import { roundCents, type EnvSnapshot, type Escalation, type Order, type PolicyRule, type Refund, type Trace } from '@healer/agent';
+import { roundCents, type EnvSnapshot, type Escalation, type Order, type PolicyRule, type Refund, type RefundRequest, type Trace } from '@healer/agent';
 
 // Pocket Meadow's policy as code: "the PRD". The agent never sees these. When a rule fails, its detail is
 // the only way the rest of the loop learns that rule, so every detail states the rule with the real numbers.
@@ -53,16 +53,68 @@ export function daysBetween(from: string, to: string): number {
   return Math.round((Date.parse(to) - Date.parse(from)) / 86_400_000);
 }
 
-const CENT = 0.005;
+export const CENT = 0.005;
 const RESTOCKING_KEEP = 0.85;
-const ESCALATION_THRESHOLD = 150;
+export const ESCALATION_THRESHOLD = 150;
 
-const lineValue = (o: Order, i: Order['items'][number]) => i.qty * i.unitPrice * (1 - o.discountPct / 100);
+type ItemCount = { sku: string; qty: number };
+
+const lineValue = (o: Order, i: ItemCount) => i.qty * o.items.find((x) => x.sku === i.sku)!.unitPrice * (1 - o.discountPct / 100);
 const goodsValue = (o: Order) => roundCents(o.items.reduce((n, i) => n + lineValue(o, i), 0));
 const nonFinalValue = (o: Order) => roundCents(o.items.filter((i) => !i.finalSale).reduce((n, i) => n + lineValue(o, i), 0));
+const itemRefund = (o: Order, i: ItemCount) => {
+  const item = o.items.find((x) => x.sku === i.sku)!;
+  return item.finalSale ? 0 : lineValue(o, i) * (item.opened ? RESTOCKING_KEEP : 1);
+};
 
-export function refundableValue(o: Order): number {
-  return roundCents(o.items.filter((i) => !i.finalSale).reduce((n, i) => n + lineValue(o, i) * (i.opened ? RESTOCKING_KEEP : 1), 0));
+// For showing one item: worked in whole cents, since 85% of $49.30 is $41.905, which floating point prints as $41.90.
+const restocked = (paid: number) => Math.round(Math.round(paid * 100) * RESTOCKING_KEEP) / 100;
+
+// Rounded once at the end, not per item, so a whole order comes to the same cap the restocking rule enforces.
+export function refundableValue(o: Order, items: ItemCount[] = o.items): number {
+  return roundCents(items.reduce((n, i) => n + itemRefund(o, i), 0));
+}
+
+export interface OwedRefund {
+  orderId: string;
+  due: number;
+  escalate: boolean;
+  lines: string[];
+}
+
+// The order ids and item skus a refund request names that are not in the records.
+export function unknownInRequest(before: EnvSnapshot, request: RefundRequest): string[] {
+  return request.orders.flatMap((r) => {
+    const order = before.orders.find((o) => o.id === r.orderId);
+    if (!order) return [`order ${r.orderId}`];
+    return r.items.filter((i) => !order.items.some((x) => x.sku === i.sku)).map((i) => `item ${i.sku} on ${r.orderId}`);
+  });
+}
+
+// What the customer was owed for each order in their request, under shop policy. Assumes every order and item
+// named is in the records (see unknownInRequest). Quantities above what was bought count as what was bought.
+export function amountOwed(before: EnvSnapshot, customerId: string, request: RefundRequest): OwedRefund[] {
+  return request.orders.map((r) => {
+    const order = before.orders.find((o) => o.id === r.orderId)!;
+    const nothing = (line: string): OwedRefund => ({ orderId: order.id, due: 0, escalate: false, lines: [line] });
+    if (order.customerId !== customerId) return nothing(`${order.id} belongs to another customer, so nothing on it is owed to this one.`);
+    if (!order.deliveredAt) return nothing(`${order.id} has not been delivered (its status is ${order.status}); nothing is refundable before delivery.`);
+    const days = daysBetween(order.deliveredAt, before.today);
+    if (days > 30) return nothing(`${order.id} was delivered ${order.deliveredAt}, ${days} days ago; refunds are allowed only within 30 days of delivery.`);
+    const earlier = before.refunds.find((x) => x.orderId === order.id);
+    if (earlier) return nothing(`${order.id} already had refund ${earlier.id} of ${usd(earlier.amount)}; an order that already has a refund cannot be refunded again.`);
+    const items = r.items.map((i) => ({ sku: i.sku, qty: Math.min(i.qty, order.items.find((x) => x.sku === i.sku)!.qty) }));
+    const due = refundableValue(order, items);
+    const lines = items.map((i) => {
+      const item = order.items.find((x) => x.sku === i.sku)!;
+      const name = `${i.qty > 1 ? `${i.qty} x ` : ''}${item.name}`;
+      const paid = lineValue(order, i);
+      if (item.finalSale) return `${name}, final sale, $0.00`;
+      if (item.opened) return `${name}, opened, 85% of ${usd(paid)} = ${usd(restocked(paid))}`;
+      return `${name}, ${usd(paid)}`;
+    });
+    return { orderId: order.id, due, escalate: due > ESCALATION_THRESHOLD + CENT, lines };
+  });
 }
 
 // Orders that received a refund in this trace, with every refund the order now has.
@@ -139,7 +191,7 @@ const RULES: RuleDef[] = [
           const lines = order.items.map((i) => {
             const paid = lineValue(order, i);
             if (i.finalSale) return `${i.name}: final sale, $0.00`;
-            if (i.opened) return `${i.name}: opened, 85% of ${usd(paid)} = ${usd(paid * RESTOCKING_KEEP)}`;
+            if (i.opened) return `${i.name}: opened, 85% of ${usd(paid)} = ${usd(restocked(paid))}`;
             return `${i.name}: ${usd(paid)}`;
           });
           return `${refundedSoFar(total, fresh)} on ${order.id}, but opened items are refunded at 85% of what was paid for them (a 15% restocking fee), so at most ${usd(cap)} is refundable (${lines.join('; ')}${order.discountPct ? `; prices after the ${order.discountPct}% order discount` : ''}).`;

@@ -91,7 +91,7 @@ export const SEEDED_CASES: SeededCase[] = [
   {
     id: 'conditional_return',
     title: 'A return that depends on the amount',
-    teaches: 'Telling causes apart: the small model works out the right amounts but stalls instead of acting on the condition the customer set. It looks like a capability gap (larger models do act), but a clearer system prompt fixes it at the harness, the cheaper surface. No policy rule breaks when nothing is refunded, so only the customer\'s thumbs down or an eval with the exact amount catches it.',
+    teaches: 'Telling causes apart: the small model works out the right amounts but stalls instead of acting on the condition the customer set. It looks like a capability gap (larger models do act), but a clearer system prompt fixes it at the harness, the cheaper surface. No policy rule breaks when nothing is refunded; the owed-refund check catches it with $30.60 due, because the judge leaves out the pendant shade, whose return depends on the condition. For the same reason a $30.60 refund that ignores the condition passes, though the condition was met and $72.51 was owed.',
     customerId: 'c_priya',
     messages: [
       `Hi, about order ${O.multiRule}. I definitely want to return the two bud vases and the sundial. If that comes to less than $40 back, I'll send the pendant shade too (I did open that one to try it), so please refund whichever applies to my card. No need to check back with me.`,

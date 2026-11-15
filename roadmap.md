@@ -31,151 +31,6 @@ The owner often has the demo running in their own terminal on the default ports 
 
 ---
 
-## 1. Train the router on risk, not on measured failure
-
-**Status:** decided by the owner on 2026-11-13, not started.
-
-### Why
-
-The router is the only place in the demo where model weights really change, and today it cannot train.
-
-It was designed to learn "which requests does the small model fail and the large model get right". The build measured this and found almost no such requests. Once the shop's rules are in the agent's context, Haiku 5.5 behaves the same as Sonnet 5.5 on nearly everything. In one run of 40 requests, replayed 160 times on Haiku, it never contradicted Sonnet. On the hardest request found (three orders refunded in one message) it made an arithmetic error about once in 17 tries. A classifier cannot learn from an event that rare. Depending on the run, the dataset has no positive examples and training refuses to run, or it has a single one and training produces a router that sends everything to the small model.
-
-The fix is to change what the router learns. When failures are rare, the useful question is not "will the small model fail this request" but "how much does a failure on this request cost". A wrong answer to "where is my order" costs little. A wrong refund moves money. So the router should learn which requests carry risk and send those to the stronger model, while lookups and questions stay on the small one. This is how routing is commonly done in practice when failures are too rare to learn from, and every arithmetic error the build measured falls inside the risky class, so the measured gap stays covered.
-
-### Current behaviour
-
-- `services/healer/src/routerTraining.ts`, `startDatasetJob`: takes real customer messages from stored traces, replays each in a sandbox four times on the easy tier (`EASY_REPLAYS`, tier `haiku`) and once on the hard tier (the "reference"), all with the live version's context and harness.
-- `wrongness(easy, reference)` in the same file decides whether an easy replay is wrong: it broke a policy rule in code, or the reference kept every rule and the easy replay made a write the reference did not make, or refunded a different amount or method. Asking a question where the reference acted does not count as wrong. No model judge is involved.
-- A `RouterExample` (in `packages/agent/src/types.ts`) gets `needsStrong: true` only when at least one easy replay is wrong and the reference passes policy.
-- `POST /api/healer/model/router/train` answers 409 with "The dataset has no requests that needed the stronger model yet..." when there are no positives. With the rules in context, that is the usual outcome. Some runs find one positive, and training then succeeds but every strongly weighted word pushes toward the small tier.
-- `trainRouter` and `predictRoute` in `packages/agent/src/router.ts` are a bag-of-words logistic regression. They work and are tested.
-- `services/healer/src/gate.ts` has a deterministic check for routed candidates: every enabled eval case that belongs to an issue with cause `capability` must be routed to the hard tier, or the proposal is rejected.
-- The console's Model page is `web/src/console/pages/Model.tsx`. It shows the dataset, class balance, the loss curve, train and validation accuracy, positives, and validation recall.
-
-### The change
-
-1. **Label by risk as well as by measured failure.** A request needs the strong model when either of these is true:
-   - **High stakes.** In any of its replays (the four easy ones or the reference), the agent called a tool that moves money or cannot be undone. Use `issue_refund` and `cancel_order`. Count the attempt whether or not a guard blocked it. Do not count `update_shipping_address` (reversible while the order is processing) or `escalate_to_human` (a hand-off to a person, which is the safe direction).
-   - **Measured failure.** The existing `wrongness` rule, unchanged.
-2. **Record why.** Add a `reason` field to `RouterExample`: `'high_stakes'`, `'measured_failure'`, or `null` for requests that stay on the small model. When both apply, record `'measured_failure'`, since it is the stronger evidence. Show the reason as a column in the dataset table on the Model page.
-3. **Keep the reference requirement only where it belongs.** A measured failure still needs the reference to pass policy. A high-stakes label does not depend on the reference passing.
-4. **Say what it is.** Everywhere the router is described, the claim becomes "it learns which requests carry risk and sends those to the stronger model". Update the explainer on the Model page, the rationale text written by `proposeRouter` in `routerTraining.ts`, the activity line written at the end of the dataset job, the 409 message for an empty positive class, and `brief.md` (the "Real: training a small local classifier" part of section 4.5, the settled decision about the classifier's job in section 5, and section 7).
-5. **Leave the gate check as it is.** Capability cases must still be routed to the hard tier. Add one line to a routed proposal's gate reasons stating what share of the dataset the router sends to each tier, so the viewer can see where the saving comes from.
-
-### Known weakness to state in the interface, not to solve
-
-A request the agent correctly refuses (for example a refund outside the 30-day window, once the rule is in context) is labelled low stakes if no replay attempted the refund. The classifier will usually still route it to the strong model, because it shares words such as "refund" with requests that were labelled high stakes. That is generalisation from wording, not a guarantee. Say so in one sentence on the Model page.
-
-### Where the code is
-
-| What | File |
-|---|---|
-| Labelling, dataset job, training entry point, routed proposal | `services/healer/src/routerTraining.ts` |
-| Tests for the above | `services/healer/src/routerTraining.test.ts` |
-| `RouterExample`, `RouterModel` | `packages/agent/src/types.ts` |
-| Trainer and predictor | `packages/agent/src/router.ts` |
-| Routes (`/model/router/dataset`, `/train`, `/:id/propose`) and the 409 | `services/healer/src/app.ts` |
-| Gate decision and the routing check | `services/healer/src/gate.ts` |
-| Tool calls recorded on a trace (`toolCalls`, `blockedByGuard`) | `packages/agent/src/types.ts`, `packages/agent/src/tools.ts` |
-| Simulated customers and their intent mix | `services/healer/src/simulate.ts` |
-| Model page | `web/src/console/pages/Model.tsx` |
-
-### Done when
-
-- Unit tests cover: a request labelled high stakes from an attempted refund, from an attempted cancellation, and from a call a guard blocked; an address change and an escalation not counting; both reasons applying; a lookup staying on the small model.
-- From a factory reset, after firing the seeded cases and sending about 30 simulated customers, a dataset of up to 40 examples has both classes, with positives somewhere around a third to a half.
-- Training succeeds, and validation has positives so that validation recall is a real number.
-- The words with the largest positive weights are ones a person would expect, such as refund, return, cancel, money.
-- A routed proposal passes the gate with nothing regressed, the pass rate not lower, and a lower cost per task than the same version with every request on the hard tier.
-- The Model page shows the reason column, the new wording, and the known weakness.
-- `npm run typecheck`, `npm test`, and `npm run build -w @healer/web` pass, and `brief.md` matches what was built.
-
-### Cost
-
-About $1 to $3 of API spend for the live run. Replays are cheap because no model judge is involved. Use 2 trials per eval case while iterating.
-
-### Alternatives considered and set aside
-
-- **A weaker bottom model.** Start the ladder from an older model (Haiku 4.5 with thinking off) to widen the capability gap and keep the original "learn from failure" idea. Set aside because it needs a second request shape in `packages/agent/src/llm.ts` (older models take a thinking budget, not an effort level), more experiment, and might still give too few positives.
-- **Leave it.** Keep the trainer showing an honest "nothing to learn yet". Set aside because the demo's only real weight training would never run.
-
----
-
-## 2. Check that the customer got the refund they were owed
-
-**Status:** proposed, not started. The owner agreed it belongs on the roadmap and has not chosen a design.
-
-### Why
-
-The judge can see a refund that is too large but not one that is too small, and not one that never happened. Every policy rule in `policy.ts` is a limit on what the agent did: refunding past the window, above the refundable value, above $150, to the wrong method, twice. A customer who is owed $72.51 and gets $60, or who is told no when the answer is yes, breaks no rule. The model judge does not catch it either, because its prompt tells it not to judge whether actions were allowed. The verdict passes.
-
-This was seen during the build. The seeded case "A return that depends on the amount" exists because the small model worked out the right amounts and then refunded nothing, and its own `teaches` line says only a thumbs-down or an eval with the exact amount catches that. So the demo undercounts its own failures: the pass rate on live traffic looks better than it is, the failures never reach diagnosis, and the claim in `brief.md` section 7 that the small model matches the large one rests partly on a judge that cannot see this class of mistake. For a shop, shortchanging a customer is as real a failure as overpaying one.
-
-The amount owed can be worked out in code, since `policy.ts` already computes an order's refundable value. What code cannot know is which items the customer asked to return. That is a reading of the customer's words, and the judge model already reads them on every trace.
-
-### Current behaviour
-
-- `judgeTrace` in `services/healer/src/judge.ts` builds a verdict from `policyChecks(trace)` (one `CheckResult` per rule that applies, `checkId` `policy:<rule id>`), one model call with `JUDGE_SYSTEM` returning `judgeSchema` (`truthful`, `grounded`, `customer_notes`, `preferences`), and a `feedback` check when the customer rated the reply.
-- `RULES` in `services/healer/src/policy.ts` has ten rules. All of them inspect what changed (`envChanges`: new refunds, new escalations, cancellations, address changes). A rule with nothing to inspect returns `not_applicable`, so a trace that changed nothing can never fail a rule.
-- `refundableValue(order)` in `policy.ts` returns the refundable value of a whole order: items that are not final sale, after the order discount, opened items at 85% (`RESTOCKING_KEEP`), shipping excluded, rounded once at the end. It has no form for a subset of items or quantities. `daysBetween`, `usd` and the private `lineValue` are in the same file.
-- `ESCALATION_THRESHOLD` is 150 and private to `policy.ts`.
-- `DIAGNOSE_SYSTEM` in `services/healer/src/diagnose.ts` tells diagnosis that "a policy check's detail states the shop rule that was broken, with the real numbers; treat it as true". It says nothing about other code checks.
-- The router's labels have a related gap. `wrongness` in `services/healer/src/routerTraining.ts` walks only the writes the small-model replay made, so a replay that refunds less than the reference is counted wrong, but a replay that refunds nothing where the reference refunded is not. That is deliberate ("asking a question where the strong tier acted is not wrong") and is left to item 1.
-- The verdict is shown on the trace page, `web/src/console/pages/Traces.tsx` (the `#verdict` section, using `CheckList`). The policy rules are listed on `web/src/console/pages/Judge.tsx`.
-
-### The change
-
-1. **The judge reads the refund request.** Add a `refund_request` field to `judgeSchema` and one paragraph to `JUDGE_SYSTEM`. The field is null unless the customer, in the latest message read with the conversation, asks for money back. Otherwise it lists each order and the items asked for, by `sku` and quantity, and a `go_ahead` flag that is true when the customer asked for the refund to be made without checking back (for example "please go ahead", "no need to check back", or a plain "refund it to my card"). Tell the judge to leave out any item whose return depends on a condition the customer set, and to list "everything" as every item on the order. This adds a few output tokens to a call that already happens, and no new call.
-2. **Code works out what was owed.** Add `amountOwed(before: EnvSnapshot, customerId: string, request)` to `policy.ts`, returning per order: the amount due, whether it must go to a human instead, and one line per item explaining the figure. Generalise `refundableValue` to take the items and quantities to count (the whole order stays the default), keeping its single rounding at the end so $72.51 stays $72.51. An order owes nothing when it is not this customer's, is not delivered, was delivered more than 30 days ago, or already has a refund before this trace. Export the escalation threshold and use it: an amount due above $150 means the right outcome is an escalation, not a refund.
-3. **A new code check, `owed:refund`.** In `judge.ts`, after the model call, compare what was owed with what happened, per order in the request. Kind `end_state`, label "The customer got the refund they were owed".
-   - Amount due is zero: not applicable. The existing rules already catch any refund that was made.
-   - Due between a cent and $150: fail if the refunds this trace made on the order total less than the amount due by more than a cent. If there was no refund, fail only when `go_ahead` is true and the agent did not escalate about the order. Asking the customer to confirm, when they did not say to go ahead, is fine.
-   - Due above $150: fail when `go_ahead` is true and the agent neither escalated about the order nor refunded it (a refund is already caught by the escalation rule).
-   - The detail states the case with the real numbers, in the same style as the policy rules, because diagnosis and the proposer learn from it. For example: "Priya asked to return everything from PM-1018 and to go ahead. Under shop policy $72.51 was due: pendant shade, opened, 85% of $49.30 = $41.91; brass sundial, final sale, $0.00; 2 x bud vase, $30.60; the shipping fee is never refunded. The agent refunded nothing."
-   - If the judge names an item or order that is not in the records, the check is not applied, and the verdict says so.
-4. **Record what the judge read.** Add `refundRequest: RefundRequest | null` to `Verdict` in `packages/agent/src/types.ts`, with `RefundRequest = { orders: { orderId: string; items: { sku: string; qty: number }[] }[]; goAhead: boolean }`. It is null when there was no request or the judge was not called. No route changes: verdicts already travel in `TraceDetail` and `GET /api/healer/verdicts`.
-5. **Diagnosis uses the amount.** Add one sentence to `DIAGNOSE_SYSTEM`: the owed-refund check's detail states what the customer was due under shop policy, worked out in code from the items the judge read in the request; treat the amount as true and use it as the exact refund amount of an `end_state` check. The eval case then carries the exact amount and needs no judge to replay it.
-6. **Console.** On the trace page, under the verdict, show "What the customer asked to refund", read from `refundRequest`, next to the owed-refund check, so the viewer can see the one part that came from a model. On the Judge page, under the policy rules, add one line: "Refunds that are too small, or never made, are checked against what the customer asked for: a model reads the request, and code works out what was owed."
-
-### Known weakness to state in the interface, not to solve
-
-The check is only as good as the judge's reading of the request. If the judge leaves an item out, the amount owed is understated and a short refund can pass; if it adds one, a correct refund can fail. Showing `refundRequest` on the trace page is what makes this visible. Conditional requests are only partly covered: the items that depend on the condition are left out, so in "A return that depends on the amount" the check catches the agent refunding nothing, but not the agent refunding $30.60 and ignoring the condition that should have added the pendant shade.
-
-### Where the code is
-
-| What | File |
-|---|---|
-| Judge prompt, schema, `judgeTrace`, the new check | `services/healer/src/judge.ts` |
-| `refundableValue`, `lineValue`, the escalation threshold, the new `amountOwed` | `services/healer/src/policy.ts` |
-| Tests for the above | `services/healer/src/policy.test.ts`, `services/healer/src/loop.test.ts` (scripted judge output) |
-| `Verdict`, the new `RefundRequest` | `packages/agent/src/types.ts` |
-| Diagnosis prompt | `services/healer/src/diagnose.ts` |
-| Seed orders and their numbers (`PM-1018` is the mixed order) | `packages/agent/src/env.ts` |
-| Trace page verdict section | `web/src/console/pages/Traces.tsx` |
-| Judge page rules list | `web/src/console/pages/Judge.tsx` |
-
-### Done when
-
-- Unit tests for `amountOwed` cover: the whole of `PM-1018` owing $72.51; the two bud vases alone owing $30.60; an order already refunded, outside the window, not yet delivered, or another customer's owing nothing; `PM-1007` owing $189 and needing escalation.
-- Unit tests for the check, with a scripted judge (`ScriptedLlm`) returning a request: a refund $12.51 short fails and the detail names both amounts; no refund with `go_ahead` fails; no refund without `go_ahead` passes; an escalation about the order passes; `PM-1007` with no escalation fails; a judge naming an unknown `sku` leaves the check unapplied.
-- In a live run with autonomy set to manual (so only the judge spends): fire "A return that depends on the amount" a few times; any trace where the agent refunded nothing fails `owed:refund` with $30.60 due. Fire "Return a whole order with mixed items"; the trace page shows the request the judge read and $72.51 due. Ask a status question as any customer; there is no `owed:refund` check on that verdict.
-- With autonomy back on approve, a failed `owed:refund` verdict is diagnosed into an eval case whose `end_state` check carries the exact amount.
-- `npm run typecheck`, `npm test`, and `npm run build -w @healer/web` pass, and the known limit about small or missing refunds in `brief.md` section 7 is rewritten to describe the new check and its weakness.
-
-### Cost
-
-Under $1 for the live run with autonomy on manual: a judge call per fired message, and the judge's output grows by a few dozen tokens. Allow about $1 more for the diagnosis step at the end.
-
-### Alternatives considered and set aside
-
-- **Code only: refund at least the whole order's refundable value.** Set aside because partial returns are normal. A customer returning one of three items would fail every time.
-- **Ask the judge model whether the refund was right.** Set aside because the arithmetic (discounts, the 85% rule, final sale, the window, the threshold) is exactly what code does reliably and models sometimes get wrong. Splitting the work keeps the model to reading intent.
-- **A separate model call to read the request.** Set aside because the judge already sees the whole conversation on every trace, so a field on its output costs nothing extra.
-- **Leave it to thumbs-down and hand-written eval cases.** Set aside because simulated customers never rate replies, so most traffic would keep hiding this failure.
-
----
-
 ## 3. Test a new eval case before it joins the suite
 
 **Status:** proposed, not started. The owner agreed it belongs on the roadmap and has not chosen a design.
@@ -201,7 +56,7 @@ Two questions can be answered before a case is stored. Does it catch the failure
 ### The change
 
 1. **Check the case against shop policy, in code.** Add `checkConflicts(spec, env, customerId)` to `evals.ts`, using the helpers in `policy.ts`. It returns a reason when an `end_state` check demands something the rules forbid, given the case's own starting records:
-   - a refund amount above what the order can refund (from `refundableValue`, which item 2 generalises), or any positive refund on an order that is not this customer's, not delivered, past the 30-day window, or already refunded;
+   - a refund amount above what the order can refund (from `refundableValue`, which takes the items and quantities to count and defaults to the whole order), or any positive refund on an order that is not this customer's, not delivered, past the 30-day window, or already refunded;
    - a refund amount above $150 (the rule says escalate instead);
    - a refund method that does not match how the order was paid;
    - status `cancelled`, or a new address, on an order that was not processing;
@@ -278,7 +133,7 @@ So two things must change together, and only where it matters: the number of tri
 
 ### The change
 
-1. **Mark cases that move money as strict.** Add `strict: boolean` to `EvalCase`. Set it in code when a case is created: true when its source trace called `issue_refund` or `cancel_order` (whether or not a guard blocked it), or when any `end_state` check expects a refund amount or status `cancelled`. This is the same idea of high stakes as item 1; if item 1 is built first, share its helper. Diagnosis, hand-written cases and the golden cases (`golden.ts`, where "Clean refund inside the window" and "Cancel an order still processing" become strict) all use it. A person can switch it on the Evals page.
+1. **Mark cases that move money as strict.** Add `strict: boolean` to `EvalCase`. Set it in code when a case is created: true when its source trace called `issue_refund` or `cancel_order` (whether or not a guard blocked it), or when any `end_state` check expects a refund amount or status `cancelled`. This is the same idea of high stakes the router's labelling uses: share its helper, `isHighStakesTool` in `packages/agent/src/tools.ts`. Diagnosis, hand-written cases and the golden cases (`golden.ts`, where "Clean refund inside the window" and "Cancel an order still processing" become strict) all use it. A person can switch it on the Evals page.
 2. **Strict trials only when the model changes.** Add `strictTrials` to `Settings` (default 10, accepted range 3 to 20). In `gateProposal`, when the candidate's `model` differs from the base's (a tier switch or a router), run strict cases `strictTrials` times on both base and candidate, and judge them by the every-trial rule: the case passes only if every trial passes. All other cases, and every gate for a context or harness change, run as today. Context and harness changes alter what the agent knows; model changes alter how reliably it acts, which is where the observed failure came from.
 3. **Contract.** Add `rule: 'majority' | 'every'` to `CaseResult` and `strictTrials: number | null` to `EvalRun` (null when the run used no strict trials). `PATCH /api/healer/evals/:id` accepts `strict`. `runSuite` takes a `strict` option; `caseResult` takes the rule.
 4. **Stop a strict case at its first failure.** Under the every-trial rule one failure decides the case, so skip its remaining trials. A failing candidate costs little.
@@ -422,6 +277,20 @@ Smaller than the items above, so each is written as: what happens, how to see it
 - **Where.** The judge's rubric in `services/healer/src/judge.ts`, and the factory system prompt in `factoryVersion()` in `packages/agent/src/supportAgent.ts`.
 - **Suggested fix.** Decide first whether this should be fixed by hand or left for the loop to find, since it is a good example of a failure the judge cannot see yet. If fixing: add a rubric criterion that the reply makes no promise about future conversations, and let the loop learn the system prompt change. `demo-beats.md` beat 10 uses the current behaviour as a teaching point and would need updating.
 
+### The trained router does not route by risk yet
+
+- **What happens.** Since 2026-11-15 the router's labels are by risk and training always has both classes, but the classifier that comes out does not send risky requests to the stronger model. On the live run it scored 44% on held-out requests (worse than sending everything to the small tier), its largest weights were words such as "not", "it" and "panels", and it sent the clean refund and the cancellation in the eval suite to Haiku. The gate still accepted it, because the saving was real and nothing checks where money-moving cases are routed.
+- **How to see it.** From a factory reset, fire the seeded cases, send 30 simulated customers, build a dataset of 40, train, and read the weights and the tier used on each eval trace of the routed proposal's gate run.
+- **Where.** `labelRequest` in `services/healer/src/routerTraining.ts`, `trainRouter` in `packages/agent/src/router.ts`, the routing check in `services/healer/src/gate.ts`.
+- **Suggested fix.** Two causes were seen, and they need different fixes. First, a request for a refund that the agent declined, found already done or handed to a person is labelled low risk, so "refund" sits in both classes (20 of the 25 low-risk requests). Label by what the customer asked for, not only by what a replay attempted, or keep seeded orders refundable during traffic (item 5). Second, the gate lets such a router through. Item 4's strict cases would run the clean refund and the cancellation ten times on a routed candidate; the routing check could also require every strict case to go to the hard tier, as it already does for capability cases.
+
+### The owed-refund check can write a conditional request into a wrong eval case
+
+- **What happens.** In "A return that depends on the amount" the customer's condition is met, so $72.51 is owed. The judge leaves the conditional item out, as instructed, so the check works out $30.60. When the agent refunds nothing, the check fails rightly, but diagnosis then writes an eval case that demands a refund of exactly $30.60, which an agent that refunds the correct $72.51 would fail.
+- **How to see it.** On a fresh copy, fire "A return that depends on the amount" until a trace refunds nothing, run diagnosis, and read the `end_state` check of the new eval case.
+- **Where.** The refund request paragraph of `JUDGE_SYSTEM` and `owedRefundCheck` in `services/healer/src/judge.ts`, and the sentence about the owed-refund check in `DIAGNOSE_SYSTEM` in `services/healer/src/diagnose.ts`.
+- **Suggested fix.** An owner decision between two options. Let the judge resolve a condition it can settle from the order's own numbers, which makes the amount exact but gives the model some of the arithmetic. Or have the check record that a condition was left out, and tell diagnosis to write "at least" the amount in that case. Item 3's reference runs may also set such a check aside.
+
 ### Discard is offered on a proposal that cannot be discarded
 
 - **What happens.** On a rejected proposal the "Discard" button is enabled, but the server refuses to discard anything that is not open.
@@ -453,3 +322,23 @@ Both were roadmap items (6 and 7), built with unit tests and checked live on the
 
 - **A trace's route is drawn on the agent graph.** `traceRoute` in `packages/agent/src/graph.ts` works the route out from a trace, and `GraphFlow` draws it: taken edges highlighted and numbered, the lap count on the loop, every tool of the trace's version under `run_tools` with called and blocked ones marked, and the tier `route` chose. It appears on each trace page above the Timeline and, for the latest conversation, on the Run page. `traceRoute` takes the graph shape as a second argument, because the branch labels live in `supportAgent.ts`, which already imports `graph.ts`.
 - **The Traces page shows where traces come from.** A diagram of the six sources in two groups (through the live shop, and in a sandbox), with a count for each from `GET /api/healer/traces/sources`, what starts it and what grades it. Each source opens the Explorer filtered to it. The concept map's Traces block now says it counts customer traces and gives the sandbox count on a second line. Sources carry the same readable names everywhere (`sourceWord` in `web/src/lib/format.ts`).
+
+### 2026-11-15: a check that the customer got the refund they were owed
+
+Built from item 2 (now removed), with unit tests, and checked live on the isolated copy with autonomy on manual. The live run cost about $0.27.
+
+- **The judge reads the refund request; code works out what was owed.** `judgeSchema` has a `refund_request` field (orders, items by sku and quantity, and whether the customer said to go ahead), stored on the verdict as `refundRequest`. `amountOwed` in `policy.ts` works out the amount due per order, and `refundableValue` now takes the items and quantities to count. The new code check `owed:refund`, "The customer got the refund they were owed", fails on a short refund, on no refund when the customer said to go ahead and nothing was escalated, and on more than $150 owed with neither a refund nor an escalation. `DIAGNOSE_SYSTEM` treats its amount as true; the trace page shows "What the customer asked to refund"; the Judge page says how the check works.
+- **Seen live.** "A return that depends on the amount", fired four times: three refunded $30.60 and passed the check, one refunded nothing and failed it with $30.60 due. "Return a whole order with mixed items" showed $72.51 due. A status question had no refund check. Diagnosing the failure wrote an eval case whose `end_state` check requires exactly $30.60.
+- **Departures from the written design.** The judge's message now lists the customer's orders with each item's sku, name and quantity, since the judge could not name skus otherwise. A request naming an order or item not in the records adds no check, and the trace page, not the stored verdict, says so. Quantities above what was bought count as what was bought. The check tests are in a new `judge.test.ts`. Opened items are now shown in whole cents in both this check and the restocking rule, which had printed 85% of $49.30 as $41.90; diagnosis had copied that figure into an issue summary.
+- **What the weakness costs.** In the conditional case the customer's condition was met (less than $40 back), so $72.51 was owed. The judge leaves conditional items out, so the check expects $30.60, and the eval case diagnosis wrote from it would fail an agent that refunds the right amount. Item 3's validation of new cases is where this could be caught.
+
+
+### 2026-11-15: the router is trained on risk, not on measured failure
+
+Built from item 1 (now removed), with unit tests, and run live on the isolated copy with autonomy on manual and 2 trials per case. The live run cost $2.14 by the cost meter, of which the traffic and its judging took $1.33, the dataset $0.58 and the gate $0.23.
+
+- **What changed.** A request needs the strong model when any of its replays (four on the small tier, one reference) attempted `issue_refund` or `cancel_order`, blocked or not, or when the existing `wrongness` rule found a measured failure against a reference that kept every rule. `RouterExample` records `reason` (`high_stakes`, `measured_failure` or null; measured failure wins when both apply), and the Model page shows it as a column. `labelRequest` in `routerTraining.ts` does the labelling; `isHighStakesTool` in `packages/agent/src/tools.ts` names the two tools. The Model page, the proposal rationale, the dataset activity line, the 409 for an empty positive class and `brief.md` now say the router learns which requests carry risk. A routed gate run adds "Routing share: of the N requests in the router dataset, it sends X (P%) to the hard tier and the other Y to the easy tier."
+- **Departures from the written design.** The routing share is worked out at gate time from the current dataset, not stored with the router. It gives a percentage only for the hard tier, so rounding never shows a total of 101%. The dataset links each example to the easy replay that was wrong, else one that attempted the refund or cancellation. The known weakness on the Model page was rewritten after the live run, because the run contradicted the expected behaviour (below).
+- **Seen live.** From a factory reset, the 14 seeded cases and 30 simulated customers, a dataset of 40 had 15 positives (38%): 10 measured failures and 5 high stakes. Measured failures were common because the factory version has no shop rules in context; in most, the small tier refunded, cancelled or changed an address where the reference escalated or declined, and in one it escalated where the reference only answered. Training: 31 train (12 positive), 9 held out (3 positive), 100% train accuracy, 44% validation accuracy, validation recall 33% (1 of 3). The largest positive weights were "not", "it", "panels", "two", "of" and "please", not the refund and cancel words the item expected.
+- **The gate.** To compare against every request on the hard tier, the live version was first moved to Sonnet with the manual tier picker, then the router was proposed on top of it. The gate accepted it, verbatim: "Accepted: cost per task goes from $0.0099 on version 1 to $0.0017 on version 2 (-83%), no case regressed and the pass rate did not drop.", "Pass rate: 83% (5 of 6 cases) on version 1, 100% (6 of 6) on version 2 (+17 points).", "Routing: no enabled eval case belongs to a capability issue, so routing was not checked case by case.", "Routing share: of the 40 requests in the router dataset, it sends 16 (40%) to sonnet and the other 24 to haiku.", and "Fixed: "Cancel an order still processing" failed on version 1 and passes on version 2 (2 of 2 trials passed)." The fix is noise from two trials. On the suite the router sent the status question to Sonnet and the clean refund and the cancellation to Haiku: the saving is real, but it does not come from routing by risk.
+- **What the run says.** Both classes now appear, so training always has something to learn, but 40 examples are too few for a word-counting classifier to find risk in the wording. Traffic uses up the live shop's refundable orders, so 20 of the 25 low-risk requests also asked for a refund, return or cancellation that the agent declined, found already done, or passed to a person; "refund" sits on both sides and cannot separate them. The router kept 17 of those 20 on the small tier. The gate checks only capability cases, so it accepts a router that sends money-moving cases to the small tier. Item 4's strict cases would run the clean refund and the cancellation 10 times for a router like this one.

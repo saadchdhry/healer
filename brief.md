@@ -161,7 +161,7 @@ Three parts, started with one command.
 |---|---|---|
 | The agent being improved | Starts on Claude Haiku 5.5 (`claude-haiku-5-5`). The loop can move it to Claude Sonnet 5.5 (`claude-sonnet-5-5`), then Claude Opus 5.5 (`claude-opus-5-5`) | Tiers differ visibly in capability and in price, so both the gain and its cost show up on the scoreboard |
 | Judge, diagnosis, proposal | Claude Opus 5.5, fixed | The teacher should be stronger than the student, and the judge must not change between versions or scores stop being comparable |
-| Router | A small classifier trained locally on the demo's own traces | Decides per request whether the small model is enough. The only place where weights really change |
+| Router | A small classifier trained locally on the demo's own traces | Learns which requests carry risk and sends those to the stronger model. The only place where weights really change |
 | Simulated customers | Claude Haiku 5.5 | Bulk message writing, where a small model is enough |
 
 **How the model surface is shown.** Two mechanisms, one simulated and one real.
@@ -172,11 +172,12 @@ Three parts, started with one command.
 - The loop proposes the switch. Diagnosis must first classify a failure as a capability gap, meaning the trace shows the agent had the right knowledge and instructions and still got it wrong. The gate then shows pass rate next to cost per task.
 - A manual model picker is also available for free play, so the viewer can try any tier and watch the scoreboard move.
 
-*Real: training a small local classifier.* Moving every request to a bigger model fixes the hard cases and overpays for the easy ones. A small router decides, per request, whether the small model is enough. It is trained on the demo's own traces, which makes it a genuine case of supervised fine-tuning at toy scale.
+*Real: training a small local classifier.* Moving every request to a bigger model fixes the hard cases and overpays for the easy ones. A small router learns which requests carry risk and sends those to the stronger model, while lookups and questions stay on the small one. It is trained on the demo's own traces, which makes it a genuine case of supervised fine-tuning at toy scale.
 
-- Training data: real customer messages replayed in a sandbox, four times on the small model and once on the large one. A request is labelled as needing the large model when a small-model replay breaks a policy rule or contradicts what the large model did. No model judge is involved, so the labels are cheap and repeatable.
+- Training data: real customer messages replayed in a sandbox, four times on the small model and once on the large one. A request is labelled as needing the large model for one of two reasons, and the dataset records which. High stakes: any replay attempted a tool that moves money or cannot be undone (a refund or a cancellation), even one a guard blocked. Measured failure: a small-model replay broke a policy rule or contradicted the large model's replay, and the large model's replay kept every rule. Measured failure is recorded when both apply. No model judge is involved, so the labels are cheap and repeatable.
+- Why risk and not failure alone: once the rules are in context the small model fails too rarely to learn from, so the router learns how much a failure would cost instead. Every error the build measured falls inside the risky class.
 - The model: a bag-of-words classifier that trains in under a second on a few dozen examples. The viewer sees the training set, the loss curve, accuracy on held-out cases, and a new weights version.
-- The gate applies to weights too. A router that sends hard cases to the small model lowers the pass rate and is rejected. A good one holds the pass rate and cuts cost per task.
+- The gate applies to weights too. A router that sends hard cases to the small model lowers the pass rate and is rejected, and so is one that sends any capability case to the small model. A good one holds the pass rate and cuts cost per task, and the gate states what share of the dataset it sends to each tier.
 - The customer simulator in section 4.3 supplies enough traffic to grow the training set.
 
 Build risks:
@@ -207,7 +208,7 @@ Build risks:
 
 - **Live model.** The agent and the loop run on live Claude models. The API key is supplied by the owner in a local `.env` file that is never committed.
 - **Model surface.** Both mechanisms are in. Switching the main model across tiers is the simulated improvement, proposed by the loop and also available as a manual picker. Training a small local classifier on traces is the real improvement.
-- **The classifier's job.** A router that decides per request whether the small model is enough. This gives the classifier a real role and ties it to model switching.
+- **The classifier's job.** A router that learns which requests carry risk and sends those to the stronger model, while the rest stay on the small one. Decided on 2026-11-13, because measured failures of the small model are too rare to learn from. This gives the classifier a real role and ties it to model switching.
 - **Scenario.** A support agent for a fictional online shop.
 - **No guided tour.** The demo shows the workings under the hood. The console home is a clickable concept map, and each block opens a deep dive.
 - **Two tabs.** The shop front at `/` is the product. The console at `/console` reflects its workings and connects to it headlessly. More than one service is allowed.
@@ -222,7 +223,7 @@ Build risks:
 
 ### Open
 
-None. The router's training signal was decided on 2026-11-13: it will learn which requests carry risk, not which ones the small model fails. That work is not built yet and is specified in `roadmap.md`, which tracks all further development.
+None. The router's training signal was decided on 2026-11-13: it will learn which requests carry risk, not which ones the small model fails. That work was built and run live on 2026-11-15 (section 7). Further development is tracked in `roadmap.md`.
 
 ## 6. Out of scope
 
@@ -247,12 +248,13 @@ How to run it is in `README.md`. This section records what turned out differentl
 **Different from the plan.**
 
 - **The capability gap between tiers is narrow.** With the shop's rules in context, the small model matches the large one on ordinary requests. It errs only on the hardest ones, such as three orders in one message, and there only about once in 17 tries when last measured. The tier switch therefore buys the removal of a rare error at about 17 times the cost per task.
-- **The router has nothing to learn yet.** Across 160 replays the small model never contradicted the large one, so the training set had no positive examples and training correctly refused to run. Later runs sometimes found a single positive example, in which case training runs and produces a router that sends everything to the small model. The trainer, the labelling, and the gate check for routing are all built and tested. They are waiting for a signal.
+- **The router learns risk, not measured failure.** It was built to learn which requests the small model fails, and that had nothing to learn from: across 160 replays the small model never contradicted the large one, so the training set had no positive examples and training refused to run, and runs that found a single one produced a router that sent everything to the small model. The labelling was therefore changed: a request now also needs the large model when any replay attempted a refund or a cancellation, and the dataset records which reason applied. On a live run from a factory reset (the seeded cases, 30 simulated customers, then a dataset of 40), 15 of 40 requests carried risk: 10 as measured failures and 5 as high stakes. Measured failures were common because the factory version has no shop rules in context, so the small model refunded or cancelled where the large one escalated or declined. Training ran, but on 31 examples the router learned wording, not risk: it scored 100% on training and 44% on 9 held out, caught 1 of 3 risky held-out requests, and its strongest words were "not", "it", "panels" and "two" rather than "refund" or "cancel". Gated against the same version on the large model, the routed version passed (pass rate 83% to 100%, cost per task $0.0099 to $0.0017), but it sent the status question to the large model and the clean refund and the cancellation to the small one. The gate has no check that money-moving requests reach the large model, so a router can pass it by being cheap.
+- **A refusal is labelled low risk, and refusals are common.** A request the agent correctly refuses, such as a refund outside the window, is labelled low risk when no replay attempted the refund. Traffic uses up the live shop's refundable orders, so on the live run 20 of the 25 low-risk requests asked for a refund, return or cancellation that the agent declined, found already done, or passed to a person. "Refund" therefore appears on both sides and cannot separate them, and the router kept 17 of those 20 on the small model. It was expected to send such requests to the large model because of their wording; it did not. The Model page states the weakness.
 - **The agent learns shop policy from failed checks, not from a document.** Policy lives only as code checks in the healer. The proposer sees the wording of a failed check and writes the note from that, one rule at a time.
 
 **Known limits.**
 
-- Refunds that are too small, or never issued, break no rule and pass the judge. Only a thumbs-down or an eval with an exact amount catches them.
+- Refunds that are too small, or never issued, break no policy rule, so a separate check catches them. The judge model reads which items the customer asked to return and whether they said to go ahead, and code works out what was owed under shop policy. The check fails when the refund falls short, when nothing was refunded although the customer said to go ahead and nothing was escalated, or when more than $150 was owed and the agent neither refunded nor escalated. It is only as good as the judge's reading: an item left out understates the amount owed, so a short refund can pass, and an item added makes a correct refund fail. Items whose return depends on a condition the customer set are left out, so in "A return that depends on the amount" the check catches the agent refunding nothing, but not the agent refunding $30.60 and ignoring the condition. Diagnosing such a failure writes an eval case that requires exactly $30.60, although the condition was met and $72.51 was owed. The trace page shows the request the judge read so these mistakes can be seen. If the judge names an order or item that is not in the records, the check is not applied.
 - The judge and the diagnosis are models and vary. Diagnosis sometimes writes a check that is too strict, which makes the gate reject a good fix until the check is edited and the proposal is proposed again.
 - A failure rate of one in five is invisible to a gate running two or three trials per case. Raise trials per case when judging model changes.
 - Traffic changes the shop's live orders, so most seeded cases behave as described only after a reset.
@@ -273,3 +275,5 @@ How to run it is in `README.md`. This section records what turned out differentl
 - 2026-11-13: Draft 7. Router decision made (route by risk) and moved to `roadmap.md`. Leftover scaffolding deleted. README cut to the basics and `demo-beats.md` added as a verified walkthrough. Roadmap extended with four proposed items and the defects the walkthrough found.
 - 2026-11-13: First batch of walkthrough defects fixed (see "Done" in `roadmap.md`). The services can now run as a second, isolated copy for testing.
 - 2026-11-15: The console draws a trace's route through the agent graph and the six sources of traces (see "Done" in `roadmap.md`). Section 4.3 now names the three sandbox sources next to the three kinds of customer traffic.
+- 2026-11-15: The judge now checks that the customer got the refund they were owed: the judge model reads the request and code works out the amount (see "Done" in `roadmap.md`). The known limit about small or missing refunds in section 7 now describes the check and its weakness.
+- 2026-11-15: The router now learns which requests carry risk, with a reason recorded per example (see "Done" in `roadmap.md`). Sections 4.5, 5 and 7 describe the new labelling and what its live run found: both classes appear, but the router learned wording rather than risk.

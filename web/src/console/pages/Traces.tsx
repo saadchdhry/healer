@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom';
-import type { EnvSnapshot, TraceSource } from '@healer/agent';
+import type { EnvSnapshot, RefundRequest, TraceSource } from '@healer/agent';
 import { call } from '../../lib/api.ts';
 import { useAction, useApi } from '../../lib/hooks.ts';
 import { dateTime, int, ms, money, sourceWord, tierName, usd } from '../../lib/format.ts';
@@ -285,7 +285,14 @@ export function TraceDetailPage() {
             }
           >
             <ActionError error={rejudge.error} />
-            {verdict ? <CheckList checks={verdict.checks} /> : <Empty>Not judged yet. The judge runs on every trace shortly after it arrives, or use Judge again.</Empty>}
+            {verdict ? (
+              <>
+                <CheckList checks={verdict.checks} />
+                <AskedToRefund request={verdict.refundRequest} before={trace.envBefore} />
+              </>
+            ) : (
+              <Empty>Not judged yet. The judge runs on every trace shortly after it arrives, or use Judge again.</Empty>
+            )}
           </Layer>
           <Layer title="Raw workings" raw>
             {trace.runs
@@ -298,6 +305,52 @@ export function TraceDetailPage() {
         </>
       )}
     </Q>
+  );
+}
+
+function AskedToRefund({ request, before }: { request: RefundRequest | null; before: EnvSnapshot }) {
+  const unknown = request
+    ? request.orders.flatMap((r) => {
+        const order = before.orders.find((o) => o.id === r.orderId);
+        return order ? r.items.filter((i) => !order.items.some((x) => x.sku === i.sku)).map((i) => `${i.sku} on ${r.orderId}`) : [r.orderId];
+      })
+    : [];
+  return (
+    <div className="hc-panel" style={{ marginTop: 10 }}>
+      <h3>What the customer asked to refund</h3>
+      {request ? (
+        <>
+          <ul style={{ margin: 0, paddingLeft: 18 }}>
+            {request.orders.map((r) => {
+              const order = before.orders.find((o) => o.id === r.orderId);
+              return (
+                <li key={r.orderId}>
+                  <span className="mono">{r.orderId}</span>:{' '}
+                  {r.items.length
+                    ? r.items.map((i) => `${i.qty} x ${order?.items.find((x) => x.sku === i.sku)?.name ?? i.sku}`).join(', ')
+                    : 'no items'}
+                </li>
+              );
+            })}
+          </ul>
+          <p className="hc-muted" style={{ margin: '6px 0 0' }}>
+            {request.goAhead ? 'The customer said to go ahead without checking back.' : 'The customer did not say to go ahead.'}
+          </p>
+          {unknown.length > 0 && (
+            <p style={{ margin: '6px 0 0' }}>
+              The judge named {unknown.join(', ')}, which {unknown.length > 1 ? 'are' : 'is'} not in the records, so the owed-refund check was not applied.
+            </p>
+          )}
+        </>
+      ) : (
+        <p className="hc-muted" style={{ margin: 0 }}>No request for money back was read from this conversation.</p>
+      )}
+      <p className="hc-sub" style={{ margin: '6px 0 0' }}>
+        This is the one part of the owed-refund check that comes from a model: the judge reads the request, and code works out what was owed. If the judge leaves an item
+        out, the amount owed is understated and a short refund can pass; if it adds one, a correct refund can fail. Items whose return depends on a condition the customer
+        set are left out, so a refund that ignores the condition is not caught.
+      </p>
+    </div>
   );
 }
 
