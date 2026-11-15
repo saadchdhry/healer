@@ -3,20 +3,14 @@ import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 import type { EnvSnapshot, TraceSource } from '@healer/agent';
 import { call } from '../../lib/api.ts';
 import { useAction, useApi } from '../../lib/hooks.ts';
-import { dateTime, int, ms, money, tierName, usd } from '../../lib/format.ts';
+import { dateTime, int, ms, money, sourceWord, tierName, usd } from '../../lib/format.ts';
 import { ActionError, Empty, Q } from '../components/States.tsx';
 import { RatingMark, TraceTable, useCustomers } from '../components/TraceTable.tsx';
+import { TraceSources } from '../components/TraceSources.tsx';
+import { TraceRoute } from '../components/GraphFlow.tsx';
 import { TraceTimeline } from '../components/TraceTimeline.tsx';
 import { CheckList, IdLink, Json, Layer, LineageStrip, PageHead, RawRun, VerdictBadge } from '../components/ui.tsx';
 
-const sourceWord: Record<TraceSource, string> = {
-  shop: 'Shop front',
-  simulator: 'Simulated customers',
-  seed: 'Seeded cases',
-  eval: 'Eval runs (sandbox)',
-  redteam: 'Red team probes (sandbox)',
-  replay: 'Router replays (sandbox)',
-};
 const liveSources: TraceSource[] = ['shop', 'simulator', 'seed'];
 const sandboxSources: TraceSource[] = ['eval', 'redteam', 'replay'];
 
@@ -47,6 +41,9 @@ export function TracesPage() {
         A run is one model or tool call, a trace is everything the agent did to answer one message, and a thread is one whole conversation. Traces are the evidence
         every other stage works from: the judge reads them, diagnosis clusters them, and the eval suite borrows its realistic inputs from them.
       </PageHead>
+      <Layer title="Where traces come from" aside="Click a source to see its traces in the Explorer">
+        <TraceSources selected={source} />
+      </Layer>
       <Layer title="Explorer" aside={rows ? `${rows.length} traces` : undefined}>
         <div className="hc-filters">
           <label className="hc-field">
@@ -206,7 +203,7 @@ export function TraceDetailPage() {
                 <dt>Customer</dt>
                 <dd>{name(trace.customerId)}</dd>
                 <dt>Source</dt>
-                <dd>{trace.source}</dd>
+                <dd>{sourceWord[trace.source]}</dd>
                 <dt>Thread</dt>
                 <dd className="mono">{trace.threadId}</dd>
                 <dt>Version</dt>
@@ -233,6 +230,9 @@ export function TraceDetailPage() {
             </div>
           </div>
           <ThreadList threadId={trace.threadId} current={trace.id} />
+          <Layer title="Route through the agent graph" aside="Every node and tool this version has, with the path this trace took through them">
+            <TraceRoute trace={trace} />
+          </Layer>
           <Layer title="Timeline" aside="Every node, model call and tool call. Click a row for its exact input and output">
             <TraceTimeline runs={trace.runs} toolCalls={trace.toolCalls} />
           </Layer>

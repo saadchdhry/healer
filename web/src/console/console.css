@@ -918,6 +918,14 @@
 .hc-map .blk.found rect.face {
   fill: var(--panel-2);
 }
+.hc-map .blk.is-on rect.face {
+  stroke: var(--ink);
+  stroke-width: 2;
+}
+.hc-map .box {
+  fill: var(--panel);
+  stroke: var(--rule);
+}
 .hc-map .blk .band {
   fill: var(--c, var(--ink));
 }

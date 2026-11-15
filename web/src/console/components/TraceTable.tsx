@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom';
 import type { Customer, Rating, TraceSummary } from '@healer/agent';
 import { useApi } from '../../lib/hooks.ts';
-import { tierName, time, usd } from '../../lib/format.ts';
+import { sourceWord, tierName, time, usd } from '../../lib/format.ts';
 import { IdLink, VerdictBadge } from './ui.tsx';
 
 export function useCustomers() {
@@ -45,7 +45,7 @@ export function TraceTable({ traces, showOutput = false, highlight }: { traces: 
             <td className="mid-only">
               <Link to={`/console/traces?customer=${t.customerId}`}>{name(t.customerId)}</Link>
             </td>
-            <td className="mid-only">{t.source}</td>
+            <td className="mid-only">{sourceWord[t.source]}</td>
             <td className="wide-only">
               <IdLink kind="version" id={t.versionId} />
             </td>

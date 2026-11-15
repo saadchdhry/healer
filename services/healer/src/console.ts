@@ -227,6 +227,7 @@ export class Healer {
       activeStages: this.activeStages(),
       counts: {
         traces: store.traceCount(),
+        sandboxTraces: store.sandboxTraceCount(),
         verdictsPassed: verdicts.passed,
         verdictsFailed: verdicts.failed,
         issuesOpen: issues.filter((i) => i.status === 'open' || i.status === 'proposed').length,
