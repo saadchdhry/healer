@@ -52,6 +52,54 @@ export async function pool<T>(items: T[], limit: number, fn: (item: T) => Promis
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
+export interface TrialPlan {
+  key: string;
+  version: AgentVersion;
+  evalCase: EvalCase;
+  rule: CaseResult['rule'];
+  trials: number;
+}
+
+// Runs each planned case its number of trials, a few trials at a time, and hands over each case's result as soon as its
+// trials are done.
+export async function runPlans(
+  h: Healer,
+  epoch: number,
+  plans: TrialPlan[],
+  onResult: (plan: TrialPlan, result: CaseResult) => void,
+  onProgress?: (done: number, total: number) => void,
+): Promise<void> {
+  const units = plans.flatMap((p) => Array.from({ length: p.trials }, () => p));
+  const trials = new Map<string, TrialResult[]>();
+  const inFlight = new Map<string, number>();
+  // Cases under the every-trial rule with a failed trial: one failure decides the case, so their remaining trials are skipped.
+  const stopped = new Set<string>();
+  const reported = new Set<string>();
+  let done = 0;
+  onProgress?.(0, units.length);
+  await pool(units, CONCURRENCY, async (plan) => {
+    if (stopped.has(plan.key)) {
+      onProgress?.(++done, units.length);
+      return;
+    }
+    h.checkEpoch(epoch);
+    inFlight.set(plan.key, (inFlight.get(plan.key) ?? 0) + 1);
+    const trial = await runTrial(h, plan.version, plan.evalCase);
+    h.checkEpoch(epoch);
+    inFlight.set(plan.key, inFlight.get(plan.key)! - 1);
+    const list = trials.get(plan.key) ?? [];
+    list.push(trial);
+    trials.set(plan.key, list);
+    if (plan.rule === 'every' && !trial.passed) stopped.add(plan.key);
+    const finished = list.length === plan.trials || (stopped.has(plan.key) && !inFlight.get(plan.key));
+    if (finished && !reported.has(plan.key)) {
+      reported.add(plan.key);
+      onResult(plan, caseResult(plan.evalCase.id, list, plan.rule));
+    }
+    onProgress?.(++done, units.length);
+  });
+}
+
 // For each enabled case, the latest result of this version that still counts: run under the rule the case needs now
 // (`strict` asks for the every-trial rule on strict cases), with the current trial count or, under the every-trial rule,
 // stopped by a failure, and not older than the last edit to the case's checks. `prior` is the run they all came from,
@@ -121,38 +169,21 @@ export async function runSuite(
   onRun?.(run);
   h.changed('evalRun');
 
-  const planned = new Map(missing.map((c) => [c.id, ruleFor(c, strict) === 'every' ? strictTrials : trialsPerCase]));
-  const units = missing.flatMap((c) => Array.from({ length: planned.get(c.id)! }, () => c));
-  const trials = new Map<string, TrialResult[]>();
-  const inFlight = new Map<string, number>();
-  // Strict cases with a failed trial: one failure decides the case, so their remaining trials are skipped.
-  const stopped = new Set<string>();
-  let done = 0;
-  onProgress?.(0, units.length);
   try {
-    await pool(units, CONCURRENCY, async (evalCase) => {
-      const rule = ruleFor(evalCase, strict);
-      if (stopped.has(evalCase.id)) {
-        onProgress?.(++done, units.length);
-        return;
-      }
-      h.checkEpoch(epoch);
-      inFlight.set(evalCase.id, (inFlight.get(evalCase.id) ?? 0) + 1);
-      const trial = await runTrial(h, version, evalCase);
-      h.checkEpoch(epoch);
-      inFlight.set(evalCase.id, inFlight.get(evalCase.id)! - 1);
-      const list = trials.get(evalCase.id) ?? [];
-      list.push(trial);
-      trials.set(evalCase.id, list);
-      if (rule === 'every' && !trial.passed) stopped.add(evalCase.id);
-      const finished = list.length === planned.get(evalCase.id) || (stopped.has(evalCase.id) && !inFlight.get(evalCase.id));
-      if (finished && !run.results.some((r) => r.caseId === evalCase.id)) {
-        run.results.push(caseResult(evalCase.id, list, rule));
+    await runPlans(
+      h,
+      epoch,
+      missing.map((c) => {
+        const rule = ruleFor(c, strict);
+        return { key: c.id, version, evalCase: c, rule, trials: rule === 'every' ? strictTrials : trialsPerCase };
+      }),
+      (_, result) => {
+        run.results.push(result);
         summarise(run);
         store.evalRuns.put(run);
-      }
-      onProgress?.(++done, units.length);
-    });
+      },
+      onProgress,
+    );
   } catch (err) {
     if (h.epoch === epoch) {
       run.status = 'failed';

@@ -428,6 +428,15 @@ export interface GateRun {
   regressedCaseIds: string[];
   decision: 'pending' | 'accept' | 'reject';
   reasons: string[];
+  // Each case that passed on the base and failed on the candidate, run once more on both versions under the same rule.
+  // The decision uses these results in place of the first round's. Absent on a gate run stored before this existed.
+  rechecks?: Recheck[];
+}
+
+export interface Recheck {
+  caseId: string;
+  base: CaseResult;
+  candidate: CaseResult;
 }
 
 // ── Router training ───────────────────────────────────────────────────────

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import type { CaseResult, EvalRun, GateRun } from '@healer/agent';
+import type { CaseResult, EvalRun, GateRun, Recheck } from '@healer/agent';
 import { call } from '../../lib/api.ts';
 import { useAction, useApi } from '../../lib/hooks.ts';
 import { useConsole } from '../stream.tsx';
@@ -9,7 +9,7 @@ import { ActionError, Empty, Q } from '../components/States.tsx';
 import { IdLink, Json, Layer, LineageStrip, PageHead, Tag, VerdictBadge } from '../components/ui.tsx';
 
 const explainer =
-  'How do we know it is better? The candidate version runs the whole eval suite in a sandbox whose shop data resets for every case, and each case runs several times because model output varies. A change is kept only if it fixes something and every case that passed before still passes. This is the ratchet.';
+  'How do we know it is better? The candidate version runs the whole eval suite in a sandbox whose shop data resets for every case, and each case runs several times because model output varies. A change is kept only if it fixes something and every case that passed before still passes. A case that passed on the base and fails on the candidate is run a second time on both versions, and counts as a regression only if it does the same again. This is the ratchet.';
 
 export function Decision({ g }: { g: GateRun }) {
   if (g.decision === 'pending') return <VerdictBadge state="pending" label="Running" />;
@@ -93,12 +93,41 @@ function StrictWeakness() {
   );
 }
 
+// The chance that a case fails under the majority rule with `n` trials, when each trial fails one time in `oneIn`.
+function caseFails(n: number, oneIn: number): number {
+  const fail = 1 / oneIn;
+  let p = 0;
+  let ways = 1;
+  for (let passes = 0; passes * 2 <= n; passes++) {
+    p += ways * (1 - fail) ** passes * fail ** (n - passes);
+    ways = (ways * (n - passes)) / (passes + 1);
+  }
+  return p;
+}
+
+function RecheckWeakness() {
+  const settings = useConsole().overview?.settings;
+  if (!settings) return null;
+  const { trialsPerCase: n, strictTrials } = settings;
+  const f = caseFails(n, 5);
+  const chance = (1 - f) * f;
+  const round = (x: number) => Math.round(x * 100);
+  return (
+    <p className="hc-muted" style={{ fontSize: 12.5 }}>
+      What running a case again cannot do: with {n} {n > 1 ? 'trials' : 'trial'} per case, a case that fails 1 time in 5 on both versions is rejected by chance about {round(chance)}% of the time
+      with one round and {round(chance ** 2)}% with two. The second round costs the other way too: a change that makes a case fail 1 time in 5 on the candidate alone is now caught about{' '}
+      {round(f ** 2)}% of the time instead of {round(f)}%, because it has to show twice. A strict case run again can cost up to {strictTrials} more trials on each version.
+    </p>
+  );
+}
+
 export function GatePage() {
   const runs = useApi('GET /api/healer/gate-runs', [], ['gateRun']);
   return (
     <>
       <PageHead title="Gate">{explainer}</PageHead>
       <TrialsSetting />
+      <RecheckWeakness />
       <StrictWeakness />
       <Layer title="Gate runs">
         <Q q={runs} what="gate runs">
@@ -172,7 +201,40 @@ function Trials({ r, strictTrials }: { r: CaseResult | undefined; strictTrials: 
   );
 }
 
-export function CaseComparison({ base, candidate, fixed = [], regressed = [] }: { base: EvalRun | null; candidate: EvalRun | null; fixed?: string[]; regressed?: string[] }) {
+function Rounds({ first, second, strictTrials }: { first: CaseResult | undefined; second: CaseResult | undefined; strictTrials: number | null }) {
+  if (!second) return <Trials r={first} strictTrials={strictTrials} />;
+  return (
+    <div className="hc-stack" style={{ gap: 4 }}>
+      {(
+        [
+          ['First round', first],
+          ['Second round', second],
+        ] as const
+      ).map(([label, r]) => (
+        <div key={label} className="hc-row" style={{ gap: 8 }}>
+          <span className="hc-muted" style={{ fontSize: 12, minWidth: 84 }}>
+            {label}
+          </span>
+          <Trials r={r} strictTrials={strictTrials} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function CaseComparison({
+  base,
+  candidate,
+  fixed = [],
+  regressed = [],
+  rechecks = [],
+}: {
+  base: EvalRun | null;
+  candidate: EvalRun | null;
+  fixed?: string[];
+  regressed?: string[];
+  rechecks?: Recheck[];
+}) {
   const evals = useApi('GET /api/healer/evals', [], ['evalCase']);
   const evalCase = (id: string) => evals.data?.find((e) => e.case.id === id)?.case;
   const ids = [...new Set([...(base?.results ?? []), ...(candidate?.results ?? [])].map((r) => r.caseId))];
@@ -192,6 +254,7 @@ export function CaseComparison({ base, candidate, fixed = [], regressed = [] }: 
         {ids.map((id) => {
           const isFixed = fixed.includes(id);
           const isReg = regressed.includes(id);
+          const again = rechecks.find((r) => r.caseId === id);
           return (
             <tr key={id} className={`hc-case-row${isFixed ? ' fixed' : isReg ? ' regressed' : ''}`}>
               <td>
@@ -202,15 +265,27 @@ export function CaseComparison({ base, candidate, fixed = [], regressed = [] }: 
               </td>
               {base && (
                 <td>
-                  <Trials r={base.results.find((r) => r.caseId === id)} strictTrials={base.strictTrials} />
+                  <Rounds first={base.results.find((r) => r.caseId === id)} second={again?.base} strictTrials={base.strictTrials} />
                 </td>
               )}
               {candidate && (
                 <td>
-                  <Trials r={candidate.results.find((r) => r.caseId === id)} strictTrials={candidate.strictTrials} />
+                  <Rounds first={candidate.results.find((r) => r.caseId === id)} second={again?.candidate} strictTrials={candidate.strictTrials} />
                 </td>
               )}
-              {base && <td>{isFixed ? <VerdictBadge state="pass" label="Fixed" /> : isReg ? <VerdictBadge state="fail" label="Regressed" /> : <span className="hc-muted">no change</span>}</td>}
+              {base && (
+                <td>
+                  {isFixed ? (
+                    <VerdictBadge state="pass" label="Fixed" />
+                  ) : isReg ? (
+                    <VerdictBadge state="fail" label="Regressed" />
+                  ) : again ? (
+                    <span className="hc-muted">not confirmed by the second round</span>
+                  ) : (
+                    <span className="hc-muted">no change</span>
+                  )}
+                </td>
+              )}
             </tr>
           );
         })}
@@ -268,8 +343,11 @@ export function GateRunPage() {
               <Empty>The gate is still running. Reasons appear when it decides.</Empty>
             )}
           </Layer>
-          <Layer title="Per case" aside="Each square is one trial; click it for its trace. A case passes when most trials pass; a strict case run under the every-trial rule passes only when every trial passes">
-            <CaseComparison base={baseRun} candidate={candidateRun} fixed={g.fixedCaseIds} regressed={g.regressedCaseIds} />
+          <Layer
+            title="Per case"
+            aside="Each square is one trial; click it for its trace. A case passes when most trials pass; a strict case run under the every-trial rule passes only when every trial passes. A case that passed on the base and failed on the candidate shows the second round it was run again in, which the decision used"
+          >
+            <CaseComparison base={baseRun} candidate={candidateRun} fixed={g.fixedCaseIds} regressed={g.regressedCaseIds} rechecks={g.rechecks ?? []} />
           </Layer>
           <Layer title="Raw workings" raw>
             {[baseRun, candidateRun].map(
