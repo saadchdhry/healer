@@ -19,6 +19,28 @@ function failingDetail(result: CaseResult | undefined): string {
   return check ? ` In a failing trial, "${check.label}" failed: ${check.detail}` : '';
 }
 
+// The chance that a request failing one time in `oneIn` shows at least one failure in `trials` trials.
+export const detectionChance = (trials: number, oneIn = 5) => 1 - (1 - 1 / oneIn) ** trials;
+
+// What the gate could see of one strict case: each side's trials, the detection chance at this trial count, why the
+// candidate failed, and, when the base already failed, that the case could not count as a regression.
+function strictReason(title: string, base: CaseResult, cand: CaseResult, baseId: number, candId: number, trials: number): string {
+  const side = (r: CaseResult, v: number) => {
+    if (r.passed) return `passed ${r.trials.length} of ${r.trials.length} trials on version ${v}`;
+    const skipped = trials - r.trials.length;
+    return `failed trial ${r.trials.findIndex((t) => !t.passed) + 1} on version ${v}${skipped ? `, so its other ${skipped} were skipped` : ''}`;
+  };
+  const sides = base.passed && cand.passed ? `passed ${trials} of ${trials} trials on version ${baseId} and on version ${candId}` : `${side(base, baseId)}, and ${side(cand, candId)}`;
+  const parts = [
+    `Strict: "${title}" ${sides}.`,
+    `A request that fails 1 time in 5 would show at least one failure in ${trials} trials ${pct(detectionChance(trials))} of the time.`,
+  ];
+  if (!base.passed) parts.push(`Because it already fails on version ${baseId}, it counts as failing on the base and cannot regress, so this gate could not use it.`);
+  const check = (cand.passed ? base : cand).trials.find((t) => !t.passed)?.checks.find((c) => !c.passed);
+  const where = cand.passed ? `On version ${baseId}` : 'In the failing trial';
+  return parts.join(' ') + (check ? ` ${where}, "${check.label}" failed: ${check.detail}` : '');
+}
+
 // How a routed candidate sends the eval cases that belong to capability issues. Decided by the router's weights
 // alone, so unlike pass rates it does not depend on how the trials happened to fall.
 export interface RoutingCheck {
@@ -99,6 +121,9 @@ export function decide(
       );
     }
   }
+  for (const r of common.filter((r) => r.rule === 'every' && candidate.strictTrials)) {
+    reasons.push(strictReason(title(r.caseId), baseBy.get(r.caseId)!, r, base.versionId, candidate.versionId, candidate.strictTrials!));
+  }
   for (const r of regressed) {
     reasons.push(`Regressed: "${title(r.caseId)}" passed on version ${base.versionId} and fails on version ${candidate.versionId} (${trials(r)}).${failingDetail(r)}`);
   }
@@ -132,14 +157,17 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
   store.proposals.put({ ...proposal, status: 'gating', gateRunId: gateRun.id });
   h.changed('gateRun', 'proposal');
 
+  // A model change alters how reliably the agent acts, so cases that move money must pass every one of many trials.
+  const model = store.versions.get(proposal.candidateVersionId)!.model;
+  const strict = JSON.stringify(store.versions.get(proposal.baseVersionId)!.model) !== JSON.stringify(model);
   let baseRun: EvalRun;
   let candidateRun: EvalRun;
   try {
     // The base run usually comes back at once from an earlier run of the live version.
-    baseRun = await runSuite(h, proposal.baseVersionId, onProgress);
+    baseRun = await runSuite(h, proposal.baseVersionId, onProgress, undefined, { strict });
     gateRun.baseRunId = baseRun.id;
     store.gateRuns.put(gateRun);
-    candidateRun = await runSuite(h, proposal.candidateVersionId, onProgress);
+    candidateRun = await runSuite(h, proposal.candidateVersionId, onProgress, undefined, { strict });
   } catch (err) {
     if (store.proposals.get(proposalId)) store.proposals.put({ ...store.proposals.get(proposalId)!, status: 'draft' });
     throw err;
@@ -149,7 +177,6 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
   const issue = proposal.issueId ? store.issues.get(proposal.issueId) : null;
   const issueCaseIds = issue ? issue.evalCaseIds.filter((id) => store.evalCases.get(id)?.enabled) : null;
   const costFirst = !issue && proposal.changes.every((c) => c.surface === 'model');
-  const model = store.versions.get(proposal.candidateVersionId)!.model;
   const routing: RoutingCheck | null =
     model.mode === 'routed'
       ? {

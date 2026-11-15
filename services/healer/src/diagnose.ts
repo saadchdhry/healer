@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { LlmError, LOOP_MODEL_ID, type AgentVersion, type Cause, type GateRun, type EvalCase, type EvalCheckSpec, type Issue, type Job, type Surface, type Verdict } from '@healer/agent';
 import { newId, now, type Healer } from './console.ts';
 import * as describe from './describe.ts';
-import { CHECK_PARAMS } from './evals.ts';
+import { CHECK_PARAMS, isStrictCase } from './evals.ts';
 import { validateCase } from './validate.ts';
 
 export const SURFACE_FOR_CAUSE: Record<Cause, Surface> = { knowledge: 'context', process: 'harness', capability: 'model' };
@@ -165,6 +165,7 @@ export async function diagnoseTrace(h: Healer, traceId: string, origin: EvalCase
     env: trace.envBefore,
     checks,
     enabled: true,
+    strict: isStrictCase(checks, trace),
     validation: null,
   };
   // Tested before it is stored, so the gate never trusts a case that demands what no correct agent can do.

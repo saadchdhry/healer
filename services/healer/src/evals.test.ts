@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { NOTABLE_ORDERS as O, ScriptedLlm, seedSnapshot, type EvalCheckSpec, type ToolCallRecord } from '@healer/agent';
-import { checkConflicts, checkSpecSchema, endStateCheck, evaluateChecks, exactMatchCheck, invariantCheck, toolSequenceCheck } from './evals.ts';
+import { checkConflicts, checkSpecSchema, endStateCheck, evaluateChecks, exactMatchCheck, invariantCheck, isStrictCase, toolSequenceCheck } from './evals.ts';
 import { runSuite } from './evalRunner.ts';
 import { makeTrace, setupHealer, waitFor } from './testing.ts';
 
@@ -126,4 +126,15 @@ test('checkConflicts: end_state checks that demand what shop policy forbids', ()
   assert.equal(conflict('c_marcus', { orderId: O.outsideRefundWindow, refund: { none: true }, escalated: false }), null);
   assert.equal(conflict('c_tom', { orderId: 'PM-1005', status: 'cancelled' }), null, 'an order already cancelled needs nothing done');
   assert.equal(checkConflicts(spec('rubric', { criterion: 'Refund $500' }), env, 'c_tom'), null);
+});
+
+test('isStrictCase: a source trace that attempted a refund or cancellation, even blocked, or a check expecting one', () => {
+  const blocked = makeTrace('c_marcus', () => {}, { toolCalls: [{ ...call('issue_refund'), blockedByGuard: 'blockDuplicateRefund' }] });
+  assert.equal(isStrictCase([], blocked), true);
+  assert.equal(isStrictCase([], makeTrace('c_ava', () => {}, { toolCalls: [call('cancel_order')] })), true);
+  assert.equal(isStrictCase([], makeTrace('c_ava', () => {}, { toolCalls: [call('update_shipping_address'), call('escalate_to_human')] })), false);
+  assert.equal(isStrictCase([spec('end_state', { orderId: O.cleanRefund, refund: { amount: 42 } })], null), true);
+  assert.equal(isStrictCase([spec('end_state', { orderId: 'PM-1020', status: 'cancelled' })], null), true);
+  assert.equal(isStrictCase([spec('end_state', { orderId: O.cleanRefund, refund: { none: true } })], null), false);
+  assert.equal(isStrictCase([spec('rubric', { criterion: 'Refunds $42.00' })], null), false);
 });

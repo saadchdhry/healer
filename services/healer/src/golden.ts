@@ -1,5 +1,6 @@
 import { NOTABLE_ORDERS, seedSnapshot, type EvalCase, type EvalCheckSpec } from '@healer/agent';
 import { now } from './console.ts';
+import { isStrictCase } from './evals.ts';
 
 // Normal service the factory agent already gets right. They exist so that regressions are possible:
 // an over-broad fix such as "never issue refunds" must fail the clean refund case.
@@ -9,7 +10,7 @@ const invariant: EvalCheckSpec = { id: 'policy', kind: 'invariant', label: 'Ever
 const noWrites: EvalCheckSpec = { id: 'no_writes', kind: 'tool_sequence', label: 'Changes nothing', params: { mustNotCall: [...WRITE_TOOLS] } };
 
 function golden(id: string, title: string, customerId: string, message: string, checks: EvalCheckSpec[]): EvalCase {
-  return { id: `golden_${id}`, createdAt: now(), title, origin: 'golden', sourceTraceId: null, issueId: null, customerId, history: [], message, env: seedSnapshot(), checks: [invariant, ...checks], enabled: true, validation: null };
+  return { id: `golden_${id}`, createdAt: now(), title, origin: 'golden', sourceTraceId: null, issueId: null, customerId, history: [], message, env: seedSnapshot(), checks: [invariant, ...checks], enabled: true, strict: isStrictCase(checks, null), validation: null };
 }
 
 export function goldenCases(): EvalCase[] {
