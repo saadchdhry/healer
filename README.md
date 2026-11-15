@@ -98,5 +98,5 @@ Press "Reset to factory" on the console's home page. It restores the shop's orde
 
 Built and working end to end on live models. Two things to know before relying on it:
 
-- The router, the one part where model weights are really trained, has nothing useful to learn yet. The fix is designed and is item 1 in the roadmap.
+- The router, the one part where model weights are really trained, learns from a few dozen examples, so it is rough. Some of its labels rest on the judge model's reading of what the customer asked for (brief section 7).
 - The judge, the diagnosis, and the proposals are written by models and vary from run to run. The walkthrough says what to do when a step goes differently.
