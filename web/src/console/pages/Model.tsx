@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import type { RouterModel, Tier } from '@healer/agent';
+import type { RouterExample, RouterModel, Tier } from '@healer/agent';
 import { ApiError, call } from '../../lib/api.ts';
 import { useAction, useApi } from '../../lib/hooks.ts';
 import { dateTime, modelLabel, pct, tierName } from '../../lib/format.ts';
@@ -10,6 +10,11 @@ import { ActionError, Empty, Q } from '../components/States.tsx';
 import { IdLink, JobProgress, Json, Layer, PageHead, VerdictBadge } from '../components/ui.tsx';
 
 const tiers: Tier[] = ['haiku', 'sonnet', 'opus'];
+
+const reasonLabel: Record<NonNullable<RouterExample['reason']>, { label: string; detail: string }> = {
+  high_stakes: { label: 'High stakes', detail: 'A replay attempted a refund or a cancellation, whether or not a guard blocked it' },
+  measured_failure: { label: 'Measured failure', detail: 'A small tier replay got it wrong where the strong tier kept every rule' },
+};
 
 export function ModelPage() {
   const q = useApi('GET /api/healer/model', [], ['version', 'evalRun']);
@@ -34,8 +39,8 @@ export function ModelPage() {
     <>
       <PageHead title="Model" accent="var(--model)">
         The model is the reasoning engine, and improving it means changing weights, which is slow and expensive. Claude cannot be fine-tuned here, so moving up a tier
-        stands in for better weights. A small router trained on this demo's own traces is the one place where weights really change: it decides, per request,
-        whether the small model is enough.
+        stands in for better weights. A small router trained on this demo's own traces is the one place where weights really change: it learns which requests
+        carry risk and sends those to the stronger model, while lookups and questions stay on the small one.
       </PageHead>
       <Q q={q} what="the model view">
         {(m) => {
@@ -177,7 +182,8 @@ export function ModelPage() {
                   <div className="hc-panel" role="status" style={{ marginBottom: 12 }}>
                     <strong>Nothing to train on yet.</strong> {trainNote}
                     <p className="hc-muted" style={{ margin: '6px 0 0', fontSize: 12.5 }}>
-                      This is an expected state, not a fault. A router only learns something when some requests failed on the small tier and passed on the strong one.
+                      This is an expected state, not a fault. A router only learns something when some requests carry risk: a replay attempted a refund or a
+                      cancellation, or the small tier failed where the strong one kept every rule.
                       The dataset that was built is listed below.
                     </p>
                   </div>
@@ -204,18 +210,18 @@ export function ModelPage() {
                           <dd className="mono">
                             {pct(router.metrics.valAccuracy)} on {router.metrics.valSize} held out
                           </dd>
-                          <dt>Needed the strong tier</dt>
+                          <dt>Carry risk</dt>
                           <dd className="mono">
                             {router.metrics.trainPositives} of {router.metrics.trainSize} in training, {router.metrics.valPositives} of {router.metrics.valSize} in validation
                           </dd>
-                          <dt>Hard requests caught</dt>
-                          <dd className="mono">{router.metrics.valRecall === null ? 'no hard requests held out' : `${pct(router.metrics.valRecall)} of held-out hard requests sent to the strong tier`}</dd>
+                          <dt>Risky requests caught</dt>
+                          <dd className="mono">{router.metrics.valRecall === null ? 'no risky requests held out' : `${pct(router.metrics.valRecall)} of held-out risky requests sent to the strong tier`}</dd>
                           <dt>Threshold</dt>
                           <dd className="mono">{router.threshold}</dd>
                         </dl>
                         {router.metrics.valPositives === 0 && (
                           <p className="hc-muted" style={{ margin: '8px 0 0', fontSize: 12.5 }}>
-                            None of the held-out requests needed the strong tier, so validation accuracy says nothing about hard requests: a router that sends
+                            None of the held-out requests carry risk, so validation accuracy says nothing about risky requests: a router that sends
                             everything to the small tier would score the same.
                           </p>
                         )}
@@ -262,8 +268,13 @@ export function ModelPage() {
 
               <Layer
                 title="Labelled examples"
-                aside={`${train.length} train, ${val.length} validation. ${m.dataset.filter((d) => d.needsStrong).length} need the strong tier, ${m.dataset.filter((d) => !d.needsStrong).length} are fine on the small one`}
+                aside={`${train.length} train, ${val.length} validation. ${m.dataset.filter((d) => d.needsStrong).length} carry risk and go to the strong tier, ${m.dataset.filter((d) => !d.needsStrong).length} stay on the small one`}
               >
+                <p className="hc-muted" style={{ margin: '0 0 10px', fontSize: 12.5 }}>
+                  Known weakness: a request the agent rightly refuses, such as a refund past the 30-day window, is labelled low risk when no replay attempted the
+                  refund, so the router learns to keep such requests on the small tier; one reaches the strong tier only when its wording happens to match
+                  high-stakes requests, which is no guarantee.
+                </p>
                 {m.dataset.length ? (
                   <table className="hc-table">
                     <thead>
@@ -274,6 +285,7 @@ export function ModelPage() {
                         <th>Small tier</th>
                         <th>Strong tier</th>
                         <th>Label</th>
+                        <th>Reason</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -293,12 +305,13 @@ export function ModelPage() {
                             </IdLink>
                           </td>
                           <td>{d.needsStrong ? <strong>Needs the strong tier</strong> : 'Small tier is enough'}</td>
+                          <td>{d.reason ? <span title={reasonLabel[d.reason].detail}>{reasonLabel[d.reason].label}</span> : <span className="hc-muted">Low risk</span>}</td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
                 ) : (
-                  <Empty>No examples yet. Building the dataset replays past requests on both tiers; a request needs the strong tier when the small one failed and the strong one passed.</Empty>
+                  <Empty>No examples yet. Building the dataset replays past requests on both tiers; a request needs the strong tier when a replay attempted a refund or a cancellation, or when the small one failed where the strong one kept every rule.</Empty>
                 )}
               </Layer>
               <Layer title="Raw workings" aside={router ? `Router ${router.id}, exactly as stored` : undefined} raw>

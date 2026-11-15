@@ -402,11 +402,14 @@ export interface GateRun {
 
 // ── Router training ───────────────────────────────────────────────────────
 
-// One request replayed on both tiers. It needs the strong model when the easy tier failed and the hard tier passed.
+// One request replayed on both tiers. It needs the strong model when it carries risk: a replay attempted a tool that
+// moves money or cannot be undone, or the easy tier failed where the hard tier passed.
 export interface RouterExample {
   id: string;
   text: string;
   needsStrong: boolean;
+  // Measured failure wins when both apply, since it is the stronger evidence. Null when the small model is enough.
+  reason: 'high_stakes' | 'measured_failure' | null;
   split: 'train' | 'val';
   easyTraceId: string;
   hardTraceId: string;

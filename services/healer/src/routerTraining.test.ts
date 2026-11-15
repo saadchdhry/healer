@@ -18,9 +18,11 @@ import {
   type Proposal,
   type RouterExample,
   type RouterModel,
+  type ToolCallRecord,
+  type ToolName,
 } from '@healer/agent';
 import type { z } from 'zod';
-import { assignSplits, sourceTraces, wrongness } from './routerTraining.ts';
+import { assignSplits, labelRequest, sourceTraces, wrongness } from './routerTraining.ts';
 import { makeTrace, setupHealer, waitFor } from './testing.ts';
 
 const dirs: string[] = [];
@@ -90,8 +92,34 @@ test('wrongness: policy, disagreement with a reference that kept the rules, and 
   assert.equal(wrongness(makeTrace('c_marcus', (e) => e.addRefund(CLEAN, 1, 'original_payment', 'r'), { error: 'overloaded' }), full), null);
 });
 
+test('labelling by risk: refunds and cancellations attempted in any replay, blocked or not; measured failure wins', () => {
+  const call = (name: ToolName, blockedByGuard: ToolCallRecord['blockedByGuard'] = null): ToolCallRecord => ({ runId: 'run', name, input: {}, output: {}, blockedByGuard });
+  const t = (calls: ToolCallRecord[] = [], act: Parameters<typeof makeTrace>[1] = () => {}) => makeTrace('c_marcus', act, { toolCalls: calls });
+  const lookup = () => t([call('get_order')]);
+  const easyOnly = (...calls: ToolCallRecord[]) => labelRequest(lookup(), [lookup(), t(calls), lookup(), lookup()]);
+
+  const refundedByReference = labelRequest(t([call('get_order'), call('issue_refund')]), [lookup(), lookup(), lookup(), lookup()]);
+  assert.deepEqual([refundedByReference.reason, refundedByReference.easyPassed, refundedByReference.hardPassed], ['high_stakes', true, true], 'an attempted refund');
+  const cancelled = easyOnly(call('cancel_order'));
+  assert.equal(cancelled.reason, 'high_stakes', 'an attempted cancellation');
+  assert.equal(cancelled.shown.toolCalls[0]!.name, 'cancel_order', 'the dataset links to the replay that took the risk');
+  assert.equal(easyOnly(call('issue_refund', 'requireOrderLookupBeforeWrite')).reason, 'high_stakes', 'a call a guard blocked');
+  assert.equal(easyOnly(call('update_shipping_address')).reason, null, 'an address change can be undone');
+  assert.equal(easyOnly(call('escalate_to_human')).reason, null, 'an escalation hands over to a person');
+  assert.equal(labelRequest(lookup(), [lookup(), lookup(), lookup(), lookup()]).reason, null, 'a lookup stays on the small model');
+
+  const fullRefund = t([call('issue_refund')], (e) => e.addRefund(CLEAN, 52, 'original_payment', 'r'));
+  const underRefund = t([call('issue_refund')], (e) => e.addRefund(CLEAN, 40, 'original_payment', 'r'));
+  const both = labelRequest(fullRefund, [fullRefund, underRefund, fullRefund, fullRefund]);
+  assert.deepEqual([both.reason, both.easyPassed, both.shown], ['measured_failure', false, underRefund], 'both reasons apply');
+
+  const lateRefund = t([call('issue_refund')], (e) => e.addRefund(O.outsideRefundWindow, 24, 'original_payment', 'r'));
+  const badReference = labelRequest(lateRefund, [underRefund, lookup(), lookup(), lookup()]);
+  assert.deepEqual([badReference.reason, badReference.hardPassed], ['high_stakes', false], 'high stakes does not need the reference to pass');
+});
+
 test('splits are deterministic and stratified', () => {
-  const ex = (i: number, needsStrong: boolean) => ({ id: `x${i}`, text: `request ${i}`, needsStrong, easyTraceId: '', hardTraceId: '', easyPassed: !needsStrong, hardPassed: true });
+  const ex = (i: number, needsStrong: boolean) => ({ id: `x${i}`, text: `request ${i}`, needsStrong, reason: needsStrong ? ('high_stakes' as const) : null, easyTraceId: '', hardTraceId: '', easyPassed: !needsStrong, hardPassed: true });
   const examples = [...Array.from({ length: 8 }, (_, i) => ex(i, true)), ...Array.from({ length: 12 }, (_, i) => ex(i + 8, false))];
   const a = assignSplits(examples);
   assert.deepEqual(a, assignSplits([...examples].reverse()).reverse());
@@ -123,9 +151,10 @@ test('dataset by repeated replays, honest metrics, routed proposal through the g
   const dataset = await buildDataset(h, 50);
   assert.equal(dataset.length, 20, 'distinct first messages only');
   for (const e of dataset) {
-    const positive = /late|under|flaky/.test(e.text);
-    assert.equal(e.needsStrong, positive, e.text);
-    assert.deepEqual([e.easyPassed, e.hardPassed], [!positive, true], e.text);
+    const failed = /late|under|flaky/.test(e.text);
+    const reason = failed ? 'measured_failure' : e.text.startsWith('ask') ? 'high_stakes' : null;
+    assert.deepEqual([e.reason, e.needsStrong], [reason, reason !== null], e.text);
+    assert.deepEqual([e.easyPassed, e.hardPassed], [!failed, true], e.text);
     assert.equal(h.store.trace(e.hardTraceId)!.tierUsed, 'sonnet');
     assert.equal(h.store.trace(e.easyTraceId)!.source, 'replay');
   }
@@ -133,13 +162,15 @@ test('dataset by repeated replays, honest metrics, routed proposal through the g
   assert.equal(h.store.trace(flaky.easyTraceId)!.toolCalls[0]!.input.amount, 40, 'easyTraceId points at the wrong replay');
   assert.equal(h.store.traceSummaries({ source: 'replay' }).length, 100, '4 easy and 1 hard replay per example');
   assert.equal(h.store.verdicts().length, 0, 'no model judge for replays');
-  assert.match(h.store.activity.list().at(-1)!.text, /20 requests, 100 replays \(4 on haiku and 1 on sonnet each\).*8 needed sonnet$/);
+  assert.match(h.store.activity.list().at(-1)!.text, /20 requests, 100 replays \(4 on haiku and 1 on sonnet each\), labelled by risk in code, no model judge; 12 carry risk and go to sonnet \(4 attempted a refund or cancellation, 8 failed on haiku where sonnet kept every rule\)$/);
 
   const trained = await h.call<RouterModel>('POST', '/api/healer/model/router/train');
   assert.equal(trained.status, 200);
   const m = trained.body.metrics;
-  assert.deepEqual([m.trainSize, m.trainPositives, m.valSize, m.valPositives], [15, 6, 5, 2]);
+  assert.deepEqual([m.trainSize, m.trainPositives, m.valSize, m.valPositives], [15, 9, 5, 3]);
   assert.equal(typeof m.valRecall, 'number');
+  const strongest = trained.body.vocabulary.map((w, i) => ({ w, v: trained.body.weights[i]! })).sort((a, b) => b.v - a.v);
+  assert.ok(strongest.slice(0, 3).some((p) => p.w === 'refund'), strongest.slice(0, 5).map((p) => p.w).join(', '));
 
   // A capability issue whose case the router must send to sonnet.
   const issue: Issue = {
@@ -152,7 +183,7 @@ test('dataset by repeated replays, honest metrics, routed proposal through the g
 
   const proposal = (await h.call<Proposal>('POST', `/api/healer/model/router/${trained.body.id}/propose`)).body;
   assert.deepEqual([proposal.author, proposal.issueId], ['loop', null]);
-  assert.match(proposal.rationale, /Of the 2 held-out requests that needed sonnet, it routes \d+% there\./);
+  assert.match(proposal.rationale, /It learns which requests carry risk and sends those to sonnet, while lookups and questions stay on haiku\..*Of the 3 held-out requests that carry risk, it routes \d+% to sonnet\./);
   const candidate = h.store.versions.get(proposal.candidateVersionId)!;
   assert.deepEqual({ ...candidate.model, router: undefined }, { mode: 'routed', easyTier: 'haiku', hardTier: 'sonnet', effort: 'low', router: undefined });
 
@@ -162,6 +193,7 @@ test('dataset by repeated replays, honest metrics, routed proposal through the g
   assert.equal(gate.decision, 'accept', gate.reasons.join('\n'));
   assert.match(gate.reasons[0]!, /^Accepted: cost per task goes from \$\d\.\d{4} on version 0 to \$\d\.\d{4} on version 1/);
   assert.ok(gate.reasons.some((r) => /^Routing: all 1 capability case goes to sonnet \(router score 0\.\d\d\)\.$/.test(r)));
+  assert.ok(gate.reasons.some((r) => /^Routing share: of the 20 requests in the router dataset, it sends \d+ \(\d+%\) to sonnet and the other \d+ to haiku\.$/.test(r)));
 
   const live = await h.call<AgentVersion>('POST', `/api/healer/proposals/${proposal.id}/approve`);
   assert.equal(h.shop.deployed.model.mode, 'routed');
@@ -171,21 +203,21 @@ test('dataset by repeated replays, honest metrics, routed proposal through the g
   h.close();
 });
 
-test('training without any request that needed the strong model is a conflict; a router with no held-out positives says so', async () => {
+test('training without any request that carries risk is a conflict; a router with no held-out positives says so', async () => {
   const h = await healer();
-  for (const input of ['where is my parcel', 'hello there', 'ask about refunding the planters']) h.store.saveTrace(makeTrace('c_marcus', () => {}, { input }));
+  for (const input of ['where is my parcel', 'hello there', 'what time do you open']) h.store.saveTrace(makeTrace('c_marcus', () => {}, { input }));
   assert.equal((await h.call('POST', '/api/healer/model/router/train')).status, 409);
   assert.deepEqual((await buildDataset(h, 10)).map((e) => e.needsStrong), [false, false, false]);
   const res = await h.call<{ error: string; message: string }>('POST', '/api/healer/model/router/train');
   assert.equal(res.status, 409);
   assert.equal(res.body.error, 'conflict');
-  assert.match(res.body.message, /no requests that needed the stronger model yet/);
+  assert.match(res.body.message, /no requests that carry risk yet/);
   assert.equal((await h.call('POST', '/api/healer/model/router/nope/propose')).status, 404);
 
   h.store.setRouterDataset(h.store.routerDataset().map((e, i) => ({ ...e, needsStrong: i === 0, split: 'train' })));
   const trained = (await h.call<RouterModel>('POST', '/api/healer/model/router/train')).body;
   assert.equal(trained.metrics.valRecall, null);
   const proposal = (await h.call<Proposal>('POST', `/api/healer/model/router/${trained.id}/propose`)).body;
-  assert.match(proposal.rationale, /None of the held-out requests needed sonnet, so the held-out accuracy says nothing/);
+  assert.match(proposal.rationale, /None of the held-out requests carry risk, so the held-out accuracy says nothing/);
   h.close();
 });
