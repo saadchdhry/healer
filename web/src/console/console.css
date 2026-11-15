@@ -975,6 +975,20 @@
 .hc-map .arrowhead {
   fill: var(--ink-3);
 }
+.hc-map .edge.taken {
+  stroke: var(--focus);
+  stroke-width: 2;
+}
+.hc-map .arrowhead.taken {
+  fill: var(--focus);
+}
+.hc-map .t-step {
+  font: 500 11px var(--mono);
+  fill: var(--focus);
+}
+.hc-map .t-blocked {
+  fill: var(--fail);
+}
 .hc-map .halo {
   fill: none;
   stroke: var(--ink);

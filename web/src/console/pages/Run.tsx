@@ -1,8 +1,8 @@
 import { useApi } from '../../lib/hooks.ts';
 import { Empty, Q } from '../components/States.tsx';
 import { TraceTable } from '../components/TraceTable.tsx';
-import { Layer, PageHead, RawRun } from '../components/ui.tsx';
-import { GraphFlow } from '../components/GraphFlow.tsx';
+import { IdLink, Layer, PageHead, RawRun } from '../components/ui.tsx';
+import { GraphFlow, TraceRoute } from '../components/GraphFlow.tsx';
 
 export function RunPage() {
   const traces = useApi('GET /api/healer/traces', [{ query: { limit: 50 } }], ['trace', 'verdict']);
@@ -28,10 +28,27 @@ export function RunPage() {
           }
         </Q>
       </Layer>
-      <Layer title="The agent graph" aside="As defined in code">
-        <Q q={graphs} what="the agent graph">
-          {(g) => <GraphFlow graph={g.agent} />}
-        </Q>
+      <Layer
+        title="The agent graph"
+        aside={
+          latestId ? (
+            <>
+              As defined in code, with the route of the latest conversation, trace <IdLink kind="trace" id={latestId} />
+            </>
+          ) : (
+            'As defined in code'
+          )
+        }
+      >
+        {latestId ? (
+          <Q q={latest} what="the latest trace">
+            {(d) => <TraceRoute trace={d.trace} />}
+          </Q>
+        ) : (
+          <Q q={graphs} what="the agent graph">
+            {(g) => <GraphFlow graph={g.agent} />}
+          </Q>
+        )}
       </Layer>
       <Layer title="Raw workings" aside={latestId ? `Model calls in the latest trace, ${latestId}` : undefined} raw>
         {!latestId ? (
