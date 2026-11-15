@@ -193,7 +193,7 @@ export async function probeOnce(h: Healer, version: AgentVersion, probe: Probe):
         detail: `Asked the same thing in other words ("${other.input}"), the agent handled it differently. ${finding.differences.join(' ')} The other reply was: "${other.output}"${decidedBy}`,
       },
     ];
-    store.saveVerdict({ id: newId('vd'), traceId: bad.id, createdAt: now(), passed: false, checks, judgeRun: compareRun, refundRequest: null });
+    store.saveVerdict({ id: newId('vd'), traceId: bad.id, createdAt: now(), passed: false, checks, judgeRun: compareRun, refundRequest: null, cancelRequest: false });
     const { issue } = await diagnoseTrace(h, bad.id, 'redteam');
     finding.issueId = issue.id;
     store.findings.put(finding);

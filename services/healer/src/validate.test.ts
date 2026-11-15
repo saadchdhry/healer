@@ -156,7 +156,7 @@ class LateRefundLlm implements LlmClient {
     let value: unknown;
     if (req.role === 'judge' && req.system === JUDGE_SYSTEM) {
       const ok = { detail: 'Fine.', passed: true };
-      value = { truthful: ok, grounded: ok, customer_notes: { applicable: false, detail: 'No notes.', passed: true }, refund_request: null, preferences: [] };
+      value = { truthful: ok, grounded: ok, customer_notes: { applicable: false, detail: 'No notes.', passed: true }, refund_request: null, cancel_request: false, preferences: [] };
     } else if (req.role === 'judge') {
       value = { results: [...message.matchAll(/^- \[(\w+)\] (.*)$/gm)].map((m) => ({ id: m[1], detail: m[2]!.includes('every item') ? 'No amounts listed.' : 'Met.', passed: !m[2]!.includes('every item') })) };
     } else if (req.role === 'diagnose') {

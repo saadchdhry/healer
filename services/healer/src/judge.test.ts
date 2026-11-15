@@ -21,7 +21,7 @@ const wholeOrder: Request = {
 };
 
 async function judged(customerId: string, act: (env: Environment) => void, request: Request) {
-  llm.pushJson({ truthful: ok, grounded: ok, customer_notes: { applicable: false, detail: 'No notes.', passed: true }, refund_request: request, preferences: [] });
+  llm.pushJson({ truthful: ok, grounded: ok, customer_notes: { applicable: false, detail: 'No notes.', passed: true }, refund_request: request, cancel_request: false, preferences: [] });
   const { verdict } = await judgeTrace(h.healer, makeTrace(customerId, act));
   return { verdict, owed: verdict.checks.find((c) => c.checkId === 'owed:refund') };
 }

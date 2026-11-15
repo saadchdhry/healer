@@ -20,6 +20,7 @@ import {
   type RouterModel,
   type ToolCallRecord,
   type ToolName,
+  type Verdict,
 } from '@healer/agent';
 import type { z } from 'zod';
 import { assignSplits, labelRequest, sourceTraces, wrongness } from './routerTraining.ts';
@@ -102,9 +103,9 @@ test('labelling by risk: refunds and cancellations attempted in any replay, bloc
   const call = (name: ToolName, blockedByGuard: ToolCallRecord['blockedByGuard'] = null): ToolCallRecord => ({ runId: 'run', name, input: {}, output: {}, blockedByGuard });
   const t = (calls: ToolCallRecord[] = [], act: Parameters<typeof makeTrace>[1] = () => {}) => makeTrace('c_marcus', act, { toolCalls: calls });
   const lookup = () => t([call('get_order')]);
-  const easyOnly = (...calls: ToolCallRecord[]) => labelRequest(lookup(), [lookup(), t(calls), lookup(), lookup()]);
+  const easyOnly = (...calls: ToolCallRecord[]) => labelRequest(lookup(), [lookup(), t(calls), lookup(), lookup()], null);
 
-  const refundedByReference = labelRequest(t([call('get_order'), call('issue_refund')]), [lookup(), lookup(), lookup(), lookup()]);
+  const refundedByReference = labelRequest(t([call('get_order'), call('issue_refund')]), [lookup(), lookup(), lookup(), lookup()], null);
   assert.deepEqual([refundedByReference.reason, refundedByReference.easyPassed, refundedByReference.hardPassed], ['high_stakes', true, true], 'an attempted refund');
   const cancelled = easyOnly(call('cancel_order'));
   assert.equal(cancelled.reason, 'high_stakes', 'an attempted cancellation');
@@ -112,16 +113,61 @@ test('labelling by risk: refunds and cancellations attempted in any replay, bloc
   assert.equal(easyOnly(call('issue_refund', 'requireOrderLookupBeforeWrite')).reason, 'high_stakes', 'a call a guard blocked');
   assert.equal(easyOnly(call('update_shipping_address')).reason, null, 'an address change can be undone');
   assert.equal(easyOnly(call('escalate_to_human')).reason, null, 'an escalation hands over to a person');
-  assert.equal(labelRequest(lookup(), [lookup(), lookup(), lookup(), lookup()]).reason, null, 'a lookup stays on the small model');
+  assert.equal(labelRequest(lookup(), [lookup(), lookup(), lookup(), lookup()], null).reason, null, 'a lookup stays on the small model');
 
   const fullRefund = t([call('issue_refund')], (e) => e.addRefund(CLEAN, 52, 'original_payment', 'r'));
   const underRefund = t([call('issue_refund')], (e) => e.addRefund(CLEAN, 40, 'original_payment', 'r'));
-  const both = labelRequest(fullRefund, [fullRefund, underRefund, fullRefund, fullRefund]);
+  const both = labelRequest(fullRefund, [fullRefund, underRefund, fullRefund, fullRefund], null);
   assert.deepEqual([both.reason, both.easyPassed, both.shown], ['measured_failure', false, underRefund], 'both reasons apply');
 
   const lateRefund = t([call('issue_refund')], (e) => e.addRefund(O.outsideRefundWindow, 24, 'original_payment', 'r'));
-  const badReference = labelRequest(lateRefund, [underRefund, lookup(), lookup(), lookup()]);
+  const badReference = labelRequest(lateRefund, [underRefund, lookup(), lookup(), lookup()], null);
   assert.deepEqual([badReference.reason, badReference.hardPassed], ['high_stakes', false], 'high stakes does not need the reference to pass');
+});
+
+test("labelling by what the customer asked: the judge's reading of a refund or cancellation counts when no replay attempted one", () => {
+  const call = (name: ToolName): ToolCallRecord => ({ runId: 'run', name, input: {}, output: {}, blockedByGuard: null });
+  const t = (calls: ToolCallRecord[] = [], act: Parameters<typeof makeTrace>[1] = () => {}) => makeTrace('c_marcus', act, { toolCalls: calls });
+  const declined = () => t([call('get_order')]);
+  const askedRefund = { refundRequest: { orders: [{ orderId: O.outsideRefundWindow, items: [] }], goAhead: true }, cancelRequest: false };
+  const askedCancel = { refundRequest: null, cancelRequest: true };
+  const askedNothing = { refundRequest: null, cancelRequest: false };
+  const replays = () => [declined(), declined(), declined(), declined()];
+
+  const refund = labelRequest(declined(), replays(), askedRefund);
+  assert.deepEqual([refund.reason, refund.easyPassed, refund.hardPassed], ['customer_asked', true, true], 'a declined refund request carries risk');
+  assert.equal(labelRequest(declined(), replays(), askedCancel).reason, 'customer_asked', 'a cancellation request that every replay handed over');
+  assert.equal(labelRequest(declined(), replays(), askedNothing).reason, null, 'a verdict that read no request');
+  assert.equal(labelRequest(declined(), replays(), null).reason, null, 'no verdict: the replays alone decide');
+  assert.equal(labelRequest(t([call('cancel_order')]), replays(), null).reason, 'high_stakes', 'no verdict, but a replay attempted a cancellation');
+
+  assert.equal(labelRequest(t([call('issue_refund')]), replays(), askedRefund).reason, 'high_stakes', 'an attempted refund wins over the reading');
+  const fullRefund = t([call('issue_refund')], (e) => e.addRefund(CLEAN, 52, 'original_payment', 'r'));
+  const underRefund = t([call('issue_refund')], (e) => e.addRefund(CLEAN, 40, 'original_payment', 'r'));
+  assert.equal(labelRequest(fullRefund, [underRefund, fullRefund, fullRefund, fullRefund], askedRefund).reason, 'measured_failure', 'a measured failure wins over both');
+});
+
+test('the dataset reads the verdict stored on each source trace', async () => {
+  const h = await healer();
+  const asked = makeTrace('c_marcus', () => {}, { input: 'please give me my money back for the planters', source: 'shop' });
+  const cancel = makeTrace('c_marcus', () => {}, { input: 'I would like to stop my order', source: 'shop' });
+  const unjudged = makeTrace('c_marcus', () => {}, { input: 'please give me my money back for the vase', source: 'shop' });
+  const status = makeTrace('c_marcus', () => {}, { input: 'where is my parcel', source: 'shop' });
+  for (const trace of [asked, cancel, unjudged, status]) h.store.saveTrace(trace);
+  const verdict = (traceId: string, read: Pick<Verdict, 'refundRequest' | 'cancelRequest'>): Verdict => ({ id: `vd_${traceId}`, traceId, createdAt: '', passed: true, checks: [], judgeRun: null, ...read });
+  h.store.saveVerdict(verdict(asked.id, { refundRequest: { orders: [{ orderId: CLEAN, items: [] }], goAhead: false }, cancelRequest: false }));
+  h.store.saveVerdict(verdict(cancel.id, { refundRequest: null, cancelRequest: true }));
+  h.store.saveVerdict(verdict(status.id, { refundRequest: null, cancelRequest: false }));
+
+  const reasons = Object.fromEntries((await buildDataset(h, 10)).map((e) => [e.text, [e.reason, e.needsStrong]]));
+  assert.deepEqual(reasons, {
+    [asked.input]: ['customer_asked', true],
+    [cancel.input]: ['customer_asked', true],
+    [unjudged.input]: [null, false],
+    [status.input]: [null, false],
+  });
+  assert.match(h.store.activity.list().at(-1)!.text, /labelled by risk; 2 carry risk and go to sonnet \(0 failed on haiku where sonnet kept every rule, 0 attempted a refund or cancellation, 2 asked for one by the judge's reading of the conversation\)$/);
+  h.close();
 });
 
 test('splits are deterministic and stratified', () => {
@@ -168,7 +214,7 @@ test('dataset by repeated replays, honest metrics, routed proposal through the g
   assert.equal(h.store.trace(flaky.easyTraceId)!.toolCalls[0]!.input.amount, 40, 'easyTraceId points at the wrong replay');
   assert.equal(h.store.traceSummaries({ source: 'replay' }).length, 100, '4 easy and 1 hard replay per example');
   assert.equal(h.store.verdicts().length, 0, 'no model judge for replays');
-  assert.match(h.store.activity.list().at(-1)!.text, /20 requests, 100 replays \(4 on haiku and 1 on sonnet each\), labelled by risk in code, no model judge; 12 carry risk and go to sonnet \(4 attempted a refund or cancellation, 8 failed on haiku where sonnet kept every rule\)$/);
+  assert.match(h.store.activity.list().at(-1)!.text, /20 requests, 100 replays \(4 on haiku and 1 on sonnet each\), labelled by risk; 12 carry risk and go to sonnet \(8 failed on haiku where sonnet kept every rule, 4 attempted a refund or cancellation, 0 asked for one by the judge's reading of the conversation\)$/);
 
   const trained = await h.call<RouterModel>('POST', '/api/healer/model/router/train');
   assert.equal(trained.status, 200);

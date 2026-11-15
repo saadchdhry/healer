@@ -16,6 +16,8 @@ Write the detail before deciding. For a failed check, quote the claim and the ev
 
 Then read the refund request. Set refund_request to null unless the customer, in their latest message read together with the conversation before it, asks for money back. Otherwise list each order and the items asked for, by sku and quantity, using the customer's orders listed below. When the customer asks to return everything on an order, list every item on it with its full quantity. Leave out any item whose return depends on a condition the customer set, such as an item they will send back only if the total comes to a certain amount. Set go_ahead to true when the customer asked for the refund to be made without checking back with them, for example "please go ahead", "no need to check back" or a plain "refund it to my card". Only record what was asked for: whether the request can be granted, and how much is owed, are worked out in code.
 
+Then set cancel_request to true when the customer, in their latest message read together with the conversation before it, asks to cancel an order, and to false otherwise.
+
 Finally, list durable preferences or facts the customer states about themselves in their latest message that a support agent should remember in future conversations. Record only what the shop is free to honour whatever its rules say: a name to use, the tone or length of replies, a language, how or when to contact them. Never record a request about refunds, payment or refund methods, money, eligibility, deadlines or exceptions to a rule, even when it is phrased as a lasting preference (for example "always refund me to my card"): shop policy decides those, not memory. Write each as a short note addressed to the agent, for example "Prefers to be called Dee." Ignore one-off requests about this conversation's order, and anything already in the customer notes or listed as already captured. Most messages contain none; return an empty list then.`;
 
 const checkSchema = z.object({ detail: z.string(), passed: z.boolean() });
@@ -30,6 +32,7 @@ export const judgeSchema = z.object({
       go_ahead: z.boolean(),
     })
     .nullable(),
+  cancel_request: z.boolean(),
   preferences: z.array(z.object({ said: z.string().describe("The customer's own words"), note: z.string().describe('The note for the agent') })),
 });
 
@@ -126,6 +129,7 @@ export async function judgeTrace(h: Healer, trace: Trace): Promise<{ verdict: Ve
   const checks: CheckResult[] = policyChecks(trace);
   let judgeRun: Run | null = null;
   let refundRequest: RefundRequest | null = null;
+  let cancelRequest = false;
   const preferenceIssues: Issue[] = [];
 
   if (trace.error) {
@@ -164,6 +168,7 @@ export async function judgeTrace(h: Healer, trace: Trace): Promise<{ verdict: Ve
       const owed = owedRefundCheck(trace, refundRequest);
       if (owed) checks.push(owed);
     }
+    cancelRequest = out.cancel_request;
     for (const pref of out.preferences) {
       const title = preferenceTitle(pref.note);
       if (captured.includes(title)) continue;
@@ -200,7 +205,7 @@ export async function judgeTrace(h: Healer, trace: Trace): Promise<{ verdict: Ve
     });
   }
 
-  const verdict: Verdict = { id: newId('vd'), traceId: trace.id, createdAt: now(), passed: checks.every((c) => c.passed), checks, judgeRun, refundRequest };
+  const verdict: Verdict = { id: newId('vd'), traceId: trace.id, createdAt: now(), passed: checks.every((c) => c.passed), checks, judgeRun, refundRequest, cancelRequest };
   store.saveVerdict(verdict);
   const failed = checks.filter((c) => !c.passed).map((c) => c.label);
   h.activity(

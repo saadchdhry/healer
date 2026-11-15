@@ -286,6 +286,8 @@ export interface Verdict {
   judgeRun: Run | null;
   // What the judge model read as the customer's request for money back; null when there was none or the judge was not called.
   refundRequest: RefundRequest | null;
+  // Whether the judge model read a request to cancel an order; false when the judge was not called.
+  cancelRequest: boolean;
 }
 
 export interface RefundRequest {
@@ -430,14 +432,15 @@ export interface GateRun {
 
 // ── Router training ───────────────────────────────────────────────────────
 
-// One request replayed on both tiers. It needs the strong model when it carries risk: a replay attempted a tool that
-// moves money or cannot be undone, or the easy tier failed where the hard tier passed.
+// One request replayed on both tiers. It needs the strong model when it carries risk: the easy tier failed where the
+// hard tier passed, a replay attempted a tool that moves money or cannot be undone, or the judge's verdict on the
+// source trace read a request for a refund or a cancellation.
 export interface RouterExample {
   id: string;
   text: string;
   needsStrong: boolean;
-  // Measured failure wins when both apply, since it is the stronger evidence. Null when the small model is enough.
-  reason: 'high_stakes' | 'measured_failure' | null;
+  // The strongest evidence that applies, in that order. Null when the small model is enough.
+  reason: 'measured_failure' | 'high_stakes' | 'customer_asked' | null;
   split: 'train' | 'val';
   easyTraceId: string;
   hardTraceId: string;
