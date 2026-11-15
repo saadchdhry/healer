@@ -42,6 +42,7 @@ function HistoryGrid({ views, versionIds }: { views: EvalCaseView[]; versionIds:
               <td style={{ padding: '0 8px', fontSize: 13, maxWidth: 320, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={c.title}>
                 {c.title}
                 {!c.enabled && <span className="hc-muted"> (disabled)</span>}
+                {c.validation?.setAside.length ? <span className="hc-muted"> ({c.validation.setAside.length} {c.validation.setAside.length > 1 ? 'checks' : 'check'} set aside)</span> : null}
               </td>
               <td style={{ padding: '0 8px' }}>
                 <Tag>{originWord[c.origin]}</Tag>
@@ -425,12 +426,132 @@ export function EvalCasePage() {
             )}
             <ActionError error={act.error} />
           </Layer>
+          <ValidationLayer c={c} reload={q.reload} />
           <Layer title="Raw workings" aside="The case exactly as stored, including the shop snapshot it starts from" raw>
             <Json value={c} />
           </Layer>
         </>
       )}
     </Q>
+  );
+}
+
+const referenceAgent = 'A stronger model that is shown every shop rule. It is used only to test new cases, never deployed.';
+
+const validationWeakness =
+  'Two reference runs can miss a check that is too strict only some of the time. A rubric is graded by a model, so a rubric check can be set aside because the grader was wrong, and the reference agent is still a model, so on the hardest requests it can fail a correct check. That is why failing one run in two only flags a check, and why a check set aside stays here and can be put back. The test against shop policy covers only end state checks; tool sequences and rubrics are tested only by the reference runs.';
+
+function ValidationLayer({ c, reload }: { c: EvalCase; reload: () => void }) {
+  const { jobs, trackJob } = useConsole();
+  const act = useAction();
+  const v = c.validation;
+  const job = jobs.find((j) => j.kind === 'validate' && j.refId === c.id && j.status === 'running');
+  const label = (id: string) => c.checks.find((k) => k.id === id)?.label ?? id;
+  return (
+    <Layer
+      title="Tested before joining the suite"
+      aside={
+        <button type="button" className="hc-btn" disabled={act.busy || Boolean(job)} onClick={() => act.run(async () => trackJob(await call('POST /api/healer/evals/:id/validate', { params: { id: c.id } })))}>
+          Test this case
+        </button>
+      }
+    >
+      <ActionError error={act.error} />
+      {job && (
+        <div className="hc-panel" style={{ marginBottom: 10 }}>
+          <JobProgress job={job} />
+        </div>
+      )}
+      {!v ? (
+        <Empty>Not tested yet. A case diagnosis writes is tested before it joins the suite; test this one to check it against shop policy, its source trace and the reference agent.</Empty>
+      ) : (
+        <div className="hc-stack">
+          <div className="hc-panel">
+            <dl className="hc-kv">
+              <dt>Tested</dt>
+              <dd>{dateTime(v.at)}</dd>
+              <dt>Catches its source failure</dt>
+              <dd>
+                {v.catchesSource === null ? (
+                  <span className="hc-muted">No source trace to test against</span>
+                ) : v.catchesSource ? (
+                  <>
+                    <VerdictBadge state="pass" label="Yes" /> {v.caughtBy.map((id) => `"${label(id)}"`).join(', ')} {v.caughtBy.length > 1 ? 'fail' : 'fails'} on the source trace
+                  </>
+                ) : (
+                  <>
+                    <VerdictBadge state="fail" label="No" /> every check it keeps passes on the source trace
+                  </>
+                )}
+              </dd>
+              <dt>Reference agent</dt>
+              <dd>
+                {v.referenceTier}. <span className="hc-muted">{referenceAgent}</span>
+              </dd>
+              <dt>Reference runs</dt>
+              <dd className="hc-row">
+                {v.referenceTraceIds.map((id) => (
+                  <IdLink key={id} kind="trace" id={id} />
+                ))}
+              </dd>
+            </dl>
+          </div>
+          <div className="hc-panel">
+            <h3>Set aside</h3>
+            {v.setAside.length ? (
+              <table className="hc-table">
+                <tbody>
+                  {v.setAside.map((s, i) => (
+                    <tr key={s.check.id}>
+                      <td>
+                        <Tag>{checkKindWord[s.check.kind]}</Tag>
+                      </td>
+                      <td>
+                        {s.check.label}
+                        <div className="hc-sub">{s.reason}</div>
+                      </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="hc-btn"
+                          disabled={act.busy}
+                          onClick={() =>
+                            act.run(async () => {
+                              await call('PATCH /api/healer/evals/:id', {
+                                params: { id: c.id },
+                                body: { checks: [...c.checks, s.check], validation: { ...v, setAside: v.setAside.filter((_, j) => j !== i) } },
+                              });
+                              reload();
+                            })
+                          }
+                        >
+                          Put back
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="hc-muted">No check was set aside.</p>
+            )}
+            <h3>Flagged</h3>
+            {v.flagged.length ? (
+              <ul>
+                {v.flagged.map((f) => (
+                  <li key={f.checkId}>
+                    {label(f.checkId)}: <span className="hc-muted">{f.reason} It stays in the case.</span>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="hc-muted">No check was flagged.</p>
+            )}
+          </div>
+        </div>
+      )}
+      <p className="hc-muted">{validationWeakness}</p>
+    </Layer>
   );
 }
 

@@ -1,8 +1,8 @@
 import { z } from 'zod';
-import { roundCents, TOOL_NAMES, type CheckKind, type CheckResult, type EvalCheckSpec, type ToolName, type Trace } from '@healer/agent';
+import { roundCents, TOOL_NAMES, type CheckKind, type CheckResult, type EnvSnapshot, type EvalCheckSpec, type ToolName, type Trace } from '@healer/agent';
 import type { Healer } from './console.ts';
 import { gradeRubrics, policyChecks } from './judge.ts';
-import { envChanges, usd } from './policy.ts';
+import { CENT, daysBetween, envChanges, ESCALATION_THRESHOLD, refundableValue, usd } from './policy.ts';
 
 // The `params` shape of each check kind an eval case can carry. Validated at the HTTP boundary and on model output.
 
@@ -45,6 +45,16 @@ export const checkSpecSchema = z.discriminatedUnion('kind', [
   specOf('exact_match'),
   specOf('rubric'),
 ]);
+
+export const caseValidationSchema = z.object({
+  at: z.string(),
+  referenceTier: z.enum(['haiku', 'sonnet', 'opus']),
+  referenceTraceIds: z.array(z.string()),
+  catchesSource: z.boolean().nullable(),
+  caughtBy: z.array(z.string()),
+  setAside: z.array(z.object({ check: checkSpecSchema, reason: z.string() })),
+  flagged: z.array(z.object({ checkId: z.string(), reason: z.string() })),
+});
 
 // ── Interpreters ──
 
@@ -120,6 +130,45 @@ export function exactMatchCheck(spec: EvalCheckSpec, trace: Trace): CheckResult 
   const { contains } = CHECK_PARAMS.exact_match.parse(spec.params);
   const passed = trace.output.toLowerCase().includes(contains.toLowerCase());
   return { checkId: spec.id, kind: 'exact_match', label: spec.label, passed, detail: passed ? `The reply contains "${contains}".` : `The reply does not contain "${contains}".` };
+}
+
+// Why an end_state check demands what shop policy forbids, given the case's starting records, or null. Only end_state
+// checks can be tested this way; tool sequences and rubrics are left to the reference runs.
+export function checkConflicts(spec: EvalCheckSpec, env: EnvSnapshot, customerId: string): string | null {
+  if (spec.kind !== 'end_state') return null;
+  const p = CHECK_PARAMS.end_state.parse(spec.params);
+  const order = env.orders.find((o) => o.id === p.orderId);
+  if (!order) return `it names ${p.orderId}, which is not in the case's records.`;
+  const problems: string[] = [];
+  const owner = order.customerId !== customerId ? `${order.id} belongs to another customer` : null;
+  if (p.refund && 'amount' in p.refund && p.refund.amount > CENT) {
+    const amount = usd(p.refund.amount);
+    const days = order.deliveredAt ? daysBetween(order.deliveredAt, env.today) : null;
+    const earlier = env.refunds.find((r) => r.orderId === order.id);
+    const paidWith = order.paymentMethod === 'card' ? 'original_payment' : 'store_credit';
+    if (owner) problems.push(`it demands a refund of ${amount} on ${order.id}, but ${owner}.`);
+    else if (days === null) problems.push(`it demands a refund of ${amount} on ${order.id}, which has not been delivered (its status is ${order.status}).`);
+    else if (days > 30) problems.push(`it demands a refund of ${amount} on ${order.id}, delivered ${days} days before the case starts; refunds are allowed only within 30 days.`);
+    else if (earlier) problems.push(`it demands a refund of ${amount} on ${order.id}, which already has refund ${earlier.id}.`);
+    else {
+      const cap = refundableValue(order);
+      if (p.refund.amount > cap + CENT) problems.push(`it demands a refund of ${amount} on ${order.id}, but at most ${usd(cap)} is refundable.`);
+      if (p.refund.amount > ESCALATION_THRESHOLD + CENT) problems.push(`it demands a refund of ${amount}, but a refund above ${usd(ESCALATION_THRESHOLD)} must go to a human.`);
+    }
+    if (p.refund.method && p.refund.method !== paidWith) problems.push(`it demands the refund go to ${p.refund.method}, but ${order.id} was paid ${order.paymentMethod === 'card' ? 'by card' : 'with store credit'}, so it must go to ${paidWith}.`);
+  }
+  const norm = (s: string) => s.toLowerCase().replace(/\s+/g, ' ').trim();
+  const cancels = p.status === 'cancelled' && order.status !== 'cancelled';
+  const readdresses = p.address !== undefined && !norm(order.shippingAddress).includes(norm(p.address));
+  for (const [demanded, what] of [
+    [cancels, 'it to be cancelled'],
+    [readdresses, 'a new shipping address'],
+  ] as const) {
+    if (!demanded) continue;
+    if (owner) problems.push(`it demands ${what} on ${order.id}, but ${owner}.`);
+    else if (order.status !== 'processing') problems.push(`it demands ${what} on ${order.id}, which is ${order.status}, not processing.`);
+  }
+  return problems.length ? problems.join(' ') : null;
 }
 
 const CODE_CHECKS: Record<Exclude<EvalKind, 'rubric'>, (spec: EvalCheckSpec, trace: Trace) => CheckResult> = {

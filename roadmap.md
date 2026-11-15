@@ -31,85 +31,6 @@ The owner often has the demo running in their own terminal on the default ports 
 
 ---
 
-## 3. Test a new eval case before it joins the suite
-
-**Status:** proposed, not started. The owner agreed it belongs on the roadmap and has not chosen a design.
-
-### Why
-
-Every failure becomes a permanent eval case, written by the diagnosis model, and nothing checks the case before the gate starts trusting it. A case that is wrong in the strict direction is worse than no case. The gate requires at least one of the issue's own cases to pass, so a correct fix is rejected; the loop then retries the proposer (up to three attempts per issue), each attempt chasing a check no correct agent can meet, and the issue stays open. Later, every unrelated proposal also has to live with that case.
-
-This happened twice during the build. Once diagnosis wrote an `end_state` check that misread what "refund" meant (since clarified in `DIAGNOSE_SYSTEM`: the refund field covers only refunds made during the conversation). Once it wrote a rubric demanding itemised amounts in the reply, and a correct tier switch failed its gate until a person edited the check. `brief.md` section 7 lists it as a known limit.
-
-Two questions can be answered before a case is stored. Does it catch the failure it came from? Can an agent that does the right thing pass it? The first is answered in code against the source trace. The second needs a run, but one cheap run against a reference agent that knows every rule is enough to expose a check that demands the impossible.
-
-### Current behaviour
-
-- `diagnoseTrace` in `services/healer/src/diagnose.ts` asks the diagnosis model for an issue and an eval case, prepends `{ id: 'policy', kind: 'invariant' }`, builds the `EvalCase` with the trace's `envBefore`, history and input, and stores it at once with `enabled: true`. The only validation is the zod schema (`CHECK_PARAMS` in `services/healer/src/evals.ts`), which checks shape, not sense.
-- `DIAGNOSE_SYSTEM` asks that "each check must pass for any correct handling, not one particular wording, and must not demand behaviour the evidence does not establish". Nothing enforces it.
-- `evaluateChecks(h, trace, specs)` in `evals.ts` evaluates any case's checks against any trace. Code checks are free; all rubric checks of a case share one model call (`gradeRubrics` in `judge.ts`).
-- `decide` in `services/healer/src/gate.ts` rejects a proposal when "none of the issue's own eval cases passes". The loop in `services/healer/src/loop.ts` retries the proposer while `attempts < MAX_ATTEMPTS` (3) and the surface is not the model, and `previousAttempts` in `propose.ts` feeds the rejected attempts back.
-- A person can edit or disable a case with `PATCH /api/healer/evals/:id`. Editing checks calls `store.markChecksEdited`, which stops older eval results for that case being reused.
-- Hand-written cases (`POST /api/healer/evals` in `services/healer/src/app.ts`) start from `seedSnapshot()` and are not checked either.
-- `hardTierFor(live)` in `services/healer/src/routerTraining.ts` returns `sonnet` when the live tier is `haiku`, otherwise the live tier.
-
-### The change
-
-1. **Check the case against shop policy, in code.** Add `checkConflicts(spec, env, customerId)` to `evals.ts`, using the helpers in `policy.ts`. It returns a reason when an `end_state` check demands something the rules forbid, given the case's own starting records:
-   - a refund amount above what the order can refund (from `refundableValue`, which takes the items and quantities to count and defaults to the whole order), or any positive refund on an order that is not this customer's, not delivered, past the 30-day window, or already refunded;
-   - a refund amount above $150 (the rule says escalate instead);
-   - a refund method that does not match how the order was paid;
-   - status `cancelled`, or a new address, on an order that was not processing;
-   - an `orderId` that is not in the records.
-2. **Check that it catches its failure.** Run `evaluateChecks` on the source trace. If every check passes, the case does not catch the failure it came from. Record that per check: a check that passes on the source trace is not wrong, but the case as a whole should fail there.
-3. **Check that a correct agent can pass it.** Run the case twice on a reference agent: the live version with one extra shop note listing every rule from `POLICY_RULES` (label and description), on `hardTierFor(live)`. Grade both trials with `evaluateChecks`. Only reference trials that keep every policy rule count. A diagnosis check that fails on every counting trial is set aside; one that fails on one of two is kept and flagged. The reference note exists only for this test. It never enters a version, and the interface says so, because the brief's point that the agent learns rules only from failed checks must stay true.
-4. **Set aside, do not delete.** A check with a policy conflict, or that failed on every reference trial, moves out of `checks` into the case's validation record with its reason. The `policy` invariant is never set aside. A person can put a check back from the Evals page.
-5. **Contract.** In `packages/agent/src/types.ts` add `validation: CaseValidation | null` to `EvalCase`, with `CaseValidation = { at: string; referenceTier: Tier; referenceTraceIds: string[]; catchesSource: boolean | null; setAside: { check: EvalCheckSpec; reason: string }[]; flagged: { checkId: string; reason: string }[] }`. `catchesSource` is null for cases with no source trace. Add `'validate'` to `Job['kind']`. In `packages/agent/src/api.ts` add `'POST /api/healer/evals/:id/validate': Route<Job>`, which re-tests any case (a hand-written one, or one a person edited), and let `PATCH /api/healer/evals/:id` accept `validation` so restoring a check can clear it from `setAside`.
-6. **Where it runs.** Put the three steps in a `validateCase(h, evalCase, sourceTrace)` function in a new `services/healer/src/validate.ts`, called from `diagnoseTrace` before the case is stored, so the loop never gates against an untested case. It stays inside the diagnose stage: the loop graph keeps its five nodes, matching the concept map. Write one activity line per result, for example "Set aside a check from 'Refund on opened items': it failed on both reference runs (it demanded the reply list every item's amount)".
-7. **Console.** On the eval case page (`EvalCasePage` in `web/src/console/pages/Evals.tsx`), add a "Tested before joining the suite" layer: whether the case catches its source failure, the two reference traces as links, each set-aside check with its reason and a "Put back" button, and each flagged check. Add a "Test this case" button that calls the new route. Mark cases with set-aside checks in the suite list. One sentence explains the reference agent: "A stronger model that is shown every shop rule. It is used only to test new cases, never deployed."
-
-### Known weakness to state in the interface, not to solve
-
-Two reference trials can miss a check that is too strict only some of the time, and a rubric is graded by a model, so a rubric check can be set aside because the grader was wrong. The reference agent knows the rules but is still a model, so on the hardest requests it can fail a correct check and get it set aside. That is why one failure in two only flags a check, and why set-aside checks stay visible and can be put back. The conflict check covers only `end_state` checks; tool sequences and rubrics are tested only by the reference runs.
-
-### Where the code is
-
-| What | File |
-|---|---|
-| Where cases are written and stored | `services/healer/src/diagnose.ts` |
-| Check interpreters, `evaluateChecks`, `CHECK_PARAMS`, new `checkConflicts` | `services/healer/src/evals.ts` |
-| New `validateCase` | `services/healer/src/validate.ts` (new) |
-| Policy helpers and `POLICY_RULES` | `services/healer/src/policy.ts` |
-| Reference tier | `hardTierFor` in `services/healer/src/routerTraining.ts` |
-| Running one trial on a version | `runTrial` in `services/healer/src/evalRunner.ts` |
-| Gate rule about the issue's own cases | `services/healer/src/gate.ts` |
-| Retry limit | `MAX_ATTEMPTS` in `services/healer/src/loop.ts` |
-| `EvalCase`, `Job`, new `CaseValidation` | `packages/agent/src/types.ts` |
-| Routes | `packages/agent/src/api.ts`, `services/healer/src/app.ts` |
-| Eval case page and suite list | `web/src/console/pages/Evals.tsx` |
-
-### Done when
-
-- Unit tests for `checkConflicts` cover each conflict above, and a partial refund below the cap raising none.
-- Unit tests for `validateCase` with `ScriptedLlm`: a rubric that fails on both reference trials is set aside; one that fails on one is flagged; an `end_state` refund of $66.00 on `PM-1009` is set aside as a conflict (at most $59.40 is refundable); the `policy` check is never set aside; a case whose checks all pass on its source trace has `catchesSource: false`.
-- A loop test: a case with a check set aside does not block a proposal that the remaining checks accept.
-- In a live run from a factory reset, firing "Refund on opened items" and "Refund long after delivery" produces cases that show the validation layer with both reference traces, and the activity feed shows the result of each test.
-- Restoring a set-aside check puts it back in the case and the next gate uses it.
-- `npm run typecheck`, `npm test`, and `npm run build -w @healer/web` pass, and the known limit about over-strict checks in `brief.md` section 7 is updated.
-
-### Cost
-
-Each new case adds two agent runs on the reference tier and up to three rubric gradings (one per trial, plus the source trace): roughly $0.05 to $0.15 per case. A live run that diagnoses three or four failures end to end costs about $1 to $3, most of it the proposals and gates that follow.
-
-### Alternatives considered and set aside
-
-- **A model reviews the checks it just wrote.** Set aside because it is the same kind of judgement that wrote the bad check, and it cannot tell whether a correct agent could pass. Running the case can.
-- **Probation: a new case does not block the gate until it has passed once.** Set aside because the observed failure was on the issue's own case, which must pass for the fix to be accepted; probation does not help there, and it lets a wrong case linger.
-- **Validate only with code checks, no reference run.** Set aside because the second observed failure was a rubric, which code cannot judge.
-- **A sixth node in the loop graph.** Set aside because the console's concept map matches the graph one to one, and testing a test belongs to writing it, inside diagnosis.
-
----
-
 ## 4. Run more trials where a rare failure is costly
 
 **Status:** proposed, not started. The owner agreed it belongs on the roadmap and has not chosen a design.
@@ -268,7 +189,8 @@ Smaller than the items above, so each is written as: what happens, how to see it
 - **What happens.** A case written from a rubric failure ("Cancel request on shipped order PM-1013 without inventing return policy") passed on some trials and failed on others for the same version. An unstable case makes every later gate a coin toss.
 - **How to see it.** Fire the seeded case "Cancel an order already shipped" a few times and run the suite repeatedly on one version.
 - **Where.** Case writing in `services/healer/src/diagnose.ts`, rubric grading in `services/healer/src/judge.ts` (`gradeRubrics`).
-- **Suggested fix.** Fold this into roadmap item 3, which tests a new case before it joins the suite: add a stability test that runs the case several times on one version and sets it aside if the results disagree. Prefer checks decided in code over rubric checks wherever the failure can be stated as a tool call or an end state.
+- **Suggested fix.** Add a stability test that runs the case several times on one version and sets it aside if the results disagree. Prefer checks decided in code over rubric checks wherever the failure can be stated as a tool call or an end state.
+- **What testing new cases covers (2026-11-15).** Only part of it. A new case now runs twice on a reference agent shown every rule, and a check that fails one of those two runs is flagged on the case page, but it stays in the case and the gate still uses it. A check that flips less often than one time in two usually passes both runs and is not even flagged, and the case is never run twice on the live version, which is where the flipping was seen. Not reproduced live while that was built. The stability test above is still needed.
 
 ### The agent promises memory it does not have
 
@@ -289,7 +211,8 @@ Smaller than the items above, so each is written as: what happens, how to see it
 - **What happens.** In "A return that depends on the amount" the customer's condition is met, so $72.51 is owed. The judge leaves the conditional item out, as instructed, so the check works out $30.60. When the agent refunds nothing, the check fails rightly, but diagnosis then writes an eval case that demands a refund of exactly $30.60, which an agent that refunds the correct $72.51 would fail.
 - **How to see it.** On a fresh copy, fire "A return that depends on the amount" until a trace refunds nothing, run diagnosis, and read the `end_state` check of the new eval case.
 - **Where.** The refund request paragraph of `JUDGE_SYSTEM` and `owedRefundCheck` in `services/healer/src/judge.ts`, and the sentence about the owed-refund check in `DIAGNOSE_SYSTEM` in `services/healer/src/diagnose.ts`.
-- **Suggested fix.** An owner decision between two options. Let the judge resolve a condition it can settle from the order's own numbers, which makes the amount exact but gives the model some of the arithmetic. Or have the check record that a condition was left out, and tell diagnosis to write "at least" the amount in that case. Item 3's reference runs may also set such a check aside.
+- **Suggested fix.** An owner decision between two options. Let the judge resolve a condition it can settle from the order's own numbers, which makes the amount exact but gives the model some of the arithmetic. Or have the check record that a condition was left out, and tell diagnosis to write "at least" the amount in that case.
+- **What testing new cases covers (2026-11-15).** The wrong check no longer reaches the gate, but the case loses its only refund check. On the isolated copy the case diagnosis had written was entered by hand (Priya's message, end state "Refunds $30.60 on PM-1018") and tested: both reference runs refunded $72.50, so the check was set aside with "failed on both reference runs (Expected a refund of $30.60 to original_payment on PM-1018, but the run issued RF-0002 of $72.50 to original_payment)". What is left is the policy check, which an agent that refunds nothing passes, so for a case written from that failure the test would also report that it does not catch the failure it came from. The diagnosis path itself was not reproduced live. One of the two fixes above is still needed for the case to keep a correct amount.
 
 ### Discard is offered on a proposal that cannot be discarded
 
@@ -330,7 +253,7 @@ Built from item 2 (now removed), with unit tests, and checked live on the isolat
 - **The judge reads the refund request; code works out what was owed.** `judgeSchema` has a `refund_request` field (orders, items by sku and quantity, and whether the customer said to go ahead), stored on the verdict as `refundRequest`. `amountOwed` in `policy.ts` works out the amount due per order, and `refundableValue` now takes the items and quantities to count. The new code check `owed:refund`, "The customer got the refund they were owed", fails on a short refund, on no refund when the customer said to go ahead and nothing was escalated, and on more than $150 owed with neither a refund nor an escalation. `DIAGNOSE_SYSTEM` treats its amount as true; the trace page shows "What the customer asked to refund"; the Judge page says how the check works.
 - **Seen live.** "A return that depends on the amount", fired four times: three refunded $30.60 and passed the check, one refunded nothing and failed it with $30.60 due. "Return a whole order with mixed items" showed $72.51 due. A status question had no refund check. Diagnosing the failure wrote an eval case whose `end_state` check requires exactly $30.60.
 - **Departures from the written design.** The judge's message now lists the customer's orders with each item's sku, name and quantity, since the judge could not name skus otherwise. A request naming an order or item not in the records adds no check, and the trace page, not the stored verdict, says so. Quantities above what was bought count as what was bought. The check tests are in a new `judge.test.ts`. Opened items are now shown in whole cents in both this check and the restocking rule, which had printed 85% of $49.30 as $41.90; diagnosis had copied that figure into an issue summary.
-- **What the weakness costs.** In the conditional case the customer's condition was met (less than $40 back), so $72.51 was owed. The judge leaves conditional items out, so the check expects $30.60, and the eval case diagnosis wrote from it would fail an agent that refunds the right amount. Item 3's validation of new cases is where this could be caught.
+- **What the weakness costs.** In the conditional case the customer's condition was met (less than $40 back), so $72.51 was owed. The judge leaves conditional items out, so the check expects $30.60, and the eval case diagnosis wrote from it would fail an agent that refunds the right amount. Testing new eval cases, built the same day (the last entry below), sets such a check aside, but leaves the case without a refund check.
 
 
 ### 2026-11-15: the router is trained on risk, not on measured failure
@@ -342,3 +265,14 @@ Built from item 1 (now removed), with unit tests, and run live on the isolated c
 - **Seen live.** From a factory reset, the 14 seeded cases and 30 simulated customers, a dataset of 40 had 15 positives (38%): 10 measured failures and 5 high stakes. Measured failures were common because the factory version has no shop rules in context; in most, the small tier refunded, cancelled or changed an address where the reference escalated or declined, and in one it escalated where the reference only answered. Training: 31 train (12 positive), 9 held out (3 positive), 100% train accuracy, 44% validation accuracy, validation recall 33% (1 of 3). The largest positive weights were "not", "it", "panels", "two", "of" and "please", not the refund and cancel words the item expected.
 - **The gate.** To compare against every request on the hard tier, the live version was first moved to Sonnet with the manual tier picker, then the router was proposed on top of it. The gate accepted it, verbatim: "Accepted: cost per task goes from $0.0099 on version 1 to $0.0017 on version 2 (-83%), no case regressed and the pass rate did not drop.", "Pass rate: 83% (5 of 6 cases) on version 1, 100% (6 of 6) on version 2 (+17 points).", "Routing: no enabled eval case belongs to a capability issue, so routing was not checked case by case.", "Routing share: of the 40 requests in the router dataset, it sends 16 (40%) to sonnet and the other 24 to haiku.", and "Fixed: "Cancel an order still processing" failed on version 1 and passes on version 2 (2 of 2 trials passed)." The fix is noise from two trials. On the suite the router sent the status question to Sonnet and the clean refund and the cancellation to Haiku: the saving is real, but it does not come from routing by risk.
 - **What the run says.** Both classes now appear, so training always has something to learn, but 40 examples are too few for a word-counting classifier to find risk in the wording. Traffic uses up the live shop's refundable orders, so 20 of the 25 low-risk requests also asked for a refund, return or cancellation that the agent declined, found already done, or passed to a person; "refund" sits on both sides and cannot separate them. The router kept 17 of those 20 on the small tier. The gate checks only capability cases, so it accepts a router that sends money-moving cases to the small tier. Item 4's strict cases would run the clean refund and the cancellation 10 times for a router like this one.
+
+### 2026-11-15: a new eval case is tested before it joins the suite
+
+Built from item 3 (now removed), with unit tests, and checked live on the isolated copy with autonomy on manual (Approve for Beat 13) and 2 trials per case. The live run cost $0.79 by the cost meter, of which performing Beat 13 again with the new activity lines took $0.25.
+
+- **What changed.** `validateCase` in the new `services/healer/src/validate.ts` runs inside diagnosis, before a case is stored, so the loop graph keeps its five nodes. It sets aside any `end_state` check that `checkConflicts` in `evals.ts` finds at odds with shop policy on the case's own starting records (a refund above what the order can refund, any refund on an order that is not the customer's, not delivered, past 30 days or already refunded, above $150, or to the wrong method; a cancellation or new address on an order that is not processing; an order not in the records). It grades the case on its source trace, then runs it twice on a reference agent: the live version plus one shop note listing every rule in `POLICY_RULES`, on `hardTierFor(live)`. Only runs that keep every policy rule count. A check that fails every counting run is set aside; one that fails one of two is flagged. Set-aside checks move into `EvalCase.validation` with their reason, and policy checks are never set aside. The reference version exists only in memory inside `validateCase`; a loop test checks that no stored version, proposal, deployment, proposer call or diagnosis call contains the rule note. New route `POST /api/healer/evals/:id/validate` (job kind `validate`) tests any case again, and `PATCH /api/healer/evals/:id` accepts `validation`, which is how a check is put back. The eval case page has a "Tested before joining the suite" layer with the source result, the two reference traces, set-aside checks with **Put back**, flagged checks, the sentence about the reference agent, the known weakness and a **Test this case** button; the suite list marks a case with "(1 check set aside)".
+- **Departures from the written design.** `CaseValidation` also has `caughtBy`, the ids of the checks that fail on the source trace, which is how the result is recorded per check. `catchesSource` describes the case as stored, after the reference runs, so a case whose only catching check was set aside reports that it no longer catches its failure. Every `invariant` check is protected, not only the one with id `policy`. The conflict test also refuses a cancellation or new address on another customer's order, and does not count a demand to cancel an order that is already cancelled. The two reference runs run one after the other, so scripted tests are deterministic; they are saved as eval traces of the live version, with the stronger tier as their tier used. Testing again keeps checks set aside earlier and does not run them. A case written by hand is not tested when it is added, only when someone presses **Test this case**.
+- **Seen live.** From a factory reset: a status question passed; firing "Refund long after delivery" and "Refund on opened items" gave two failures (the second refunded nothing and failed the owed-refund check with $59.40 due). Diagnosis took about 25 seconds per failure. Both cases showed the layer with two reference traces on sonnet, and the feed read: "Tested 'Defective shears refund requested 52 days after delivery (PM-1002)' on the reference agent (sonnet, shown every shop rule): 2 of 2 runs kept every policy rule and passed every check" and "'Defective shears refund requested 52 days after delivery (PM-1002)' catches the failure it came from: "Every shop policy rule holds", "No refund issued on PM-1002", "Does not call issue_refund", "Explains the refund window" fail on the source trace", with the same two lines for the cushion covers case. Neither case had a check set aside. The proposal for the shears issue was gated and accepted ("Fixed: ... failed on version 0 and passes on version 1 (2 of 2 trials passed)").
+- **A set-aside, put back.** A case written by hand for Tom, with an end state demanding $66.00 on PM-1009 and a rubric demanding a receipt table with skus and tracking numbers, was tested from the case page. The feed read "Set aside a check from 'Opened covers, written by hand': "Refunds the full $66.00" conflicts with shop policy: it demands a refund of $66.00 on PM-1009, but at most $59.40 is refundable." and "... "Prints a receipt table" failed on both reference runs (The reply gives a bulleted breakdown, not a table ...)". Pressing **Put back** on the rubric returned it to the case, and the next gate's candidate run graded it in both trials. The same test on the $30.60 case that the owed-refund check writes for "A return that depends on the amount" set that check aside (see "Defects to fix").
+- **Not seen live.** A flagged check (one failure in two reference runs) and a case set aside while diagnosis was writing it; both are covered by unit tests.
+

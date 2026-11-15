@@ -202,7 +202,9 @@ export interface HealerApi {
     EvalCase,
     { title: string; customerId: string; message: string; checks: EvalCheckSpec[] }
   >;
-  'PATCH /api/healer/evals/:id': Route<EvalCase, Partial<Pick<EvalCase, 'title' | 'checks' | 'enabled'>>>;
+  'PATCH /api/healer/evals/:id': Route<EvalCase, Partial<Pick<EvalCase, 'title' | 'checks' | 'enabled' | 'validation'>>>;
+  // Tests the case as diagnosis does before a new case joins the suite: against policy, its source trace and a reference agent.
+  'POST /api/healer/evals/:id/validate': Route<Job>;
   'POST /api/healer/evals/run': Route<Job, { versionId: number }>;
   'GET /api/healer/eval-runs': Route<EvalRun[]>;
   'GET /api/healer/eval-runs/:id': Route<EvalRun>;

@@ -90,7 +90,7 @@ On the verified run the verdict passed with two **Rubric** checks: "The reply is
 `services/healer/src/policy.ts` compares the shop data before and after the reply against each rule. `services/healer/src/judge.ts` runs those rules, then sends one call to Claude Opus 5.5 for the truthful and grounded checks. The same call reads any refund request, by order, item and quantity, and whether the customer said to go ahead; `amountOwed` in `policy.ts` turns that into the amount due, and the check "The customer got the refund they were owed" fails when the agent refunded less, or refunded nothing although the customer said to go ahead. The judge model never changes between versions, so scores stay comparable.
 
 **If it goes differently**
-The judge is a model and can be strict. On one exploratory run a similar question ("has my garden chair shipped yet?") failed "The reply invents no facts" because the agent added "you'll get a shipping confirmation", a promise nothing supports. If your verdict failed like that, keep going. In Beat 5 diagnosis will turn it into its own issue: press **Dismiss** on that issue, open its eval case and untick **In the suite**. Otherwise that flaky case can make the gate reject a good change later (it did on the exploratory run).
+The judge is a model and can be strict. On one exploratory run a similar question ("has my garden chair shipped yet?") failed "The reply invents no facts" because the agent added "you'll get a shipping confirmation", a promise nothing supports. If your verdict failed like that, keep going. In Beat 5 diagnosis will turn it into its own issue: press **Dismiss** on that issue, open its eval case and untick **In the suite**. Otherwise that flaky case can make the gate reject a good change later (it did on the exploratory run). Testing a new case in Beat 5 does not remove it: a check that fails only now and then usually passes both reference runs, or at most is flagged.
 
 ---
 
@@ -118,24 +118,31 @@ Small models sometimes get lucky. If the agent declined the refund, the verdict 
 
 ---
 
-## Beat 5: Diagnosis, and a failure becomes a permanent test (3 min)
+## Beat 5: Diagnosis, and a failure becomes a permanent test (4 min)
 
 **The idea**
-*Diagnosis* asks why it went wrong and which part of the agent is at fault. There are three causes, one per surface: missing knowledge (fix the *context*, the notes the agent reads), a loose process (fix the *harness*, the prompt, tools and code around the model), or a lack of capability (fix the *model*). Diagnosis also names a *scope*: the whole shop, or one customer. And it writes an *eval case*: a test built from this failure that every future version must pass.
+*Diagnosis* asks why it went wrong and which part of the agent is at fault. There are three causes, one per surface: missing knowledge (fix the *context*, the notes the agent reads), a loose process (fix the *harness*, the prompt, tools and code around the model), or a lack of capability (fix the *model*). Diagnosis also names a *scope*: the whole shop, or one customer. And it writes an *eval case*: a test built from this failure that every future version must pass. A wrong test is worse than none, so the case is itself tested before it joins the suite: does it catch the failure it came from, and can an agent that does the right thing pass it?
 
 **Do this**
-1. Open **Diagnose** in the sidebar and press **Run diagnosis on unclustered failures**. Wait for the progress bar (about 15 seconds).
+1. Open **Diagnose** in the sidebar and press **Run diagnosis on unclustered failures**. Wait for the progress bar (about 25 seconds).
 2. Click the new issue's id to open it. Read **Diagnosis**: **Cause**, **Surface to change** and **Scope**.
 3. Under **Follow-up**, click the id under **Eval cases**. Read **Case** and **Checks**.
+4. Scroll to **Tested before joining the suite**. Read **Catches its source failure**, **Reference agent**, **Set aside** and **Flagged**, and click one of the two **Reference runs**.
 
 **What you should see**
 The verified issue: "Refunds issued after the 30-day delivery window", **Knowledge gap**, **Context**, **Shop-wide**. The summary reads "because nothing in its context states the refund window". The eval case was titled "Defective shears on an order delivered 52 days ago: no refund past the 30-day window", with **Origin** "From a failure" and four checks: a **Policy rule** check ("Every shop policy rule holds"), an **End state** check ("No refund issued on PM-1002"), a **Tool sequence** check ("Looks up order, does not refund") and a **Rubric** check ("Explains refund window"). Your titles will be worded differently.
 
+When the test of new cases was checked, the same message gave a case titled "Defective shears refund requested 52 days after delivery (PM-1002)" with the same four kinds of check. **Catches its source failure** read "Yes" and named all four as failing on the source trace. **Reference agent** read "sonnet. A stronger model that is shown every shop rule. It is used only to test new cases, never deployed." Two reference runs were linked, each declining the refund ("Order PM-1002 was delivered on 20 September, and our refund window closed 30 days after delivery"), and the layer read "No check was set aside." and "No check was flagged." **Activity** logged "Tested 'Defective shears refund requested 52 days after delivery (PM-1002)' on the reference agent (sonnet, shown every shop rule): 2 of 2 runs kept every policy rule and passed every check", just before "New eval case".
+
 **What just happened**
 `services/healer/src/diagnose.ts` sent the failed trace, its failed checks, the live version and any open issues to Opus. It chose a cause and scope, filed the trace under a new issue (or an existing one with the same root cause, which is how failures cluster), and wrote the test. The case stores a frozen copy of the shop data, so it replays the same situation forever, in a sandbox that never touches the live shop.
 
+Before storing the case, `validateCase` in `services/healer/src/validate.ts` tested it three ways. In code, it set aside any end state check that demands what shop policy forbids, such as a refund above what the order can refund. It graded the case on the failed trace, which it should fail. Then it ran the case twice on a reference agent: the live version on a stronger model, with one extra note listing every shop rule. That note exists only for this test and never reaches a version, so the agent itself still learns the rules only from failed checks. A check that fails both reference runs is set aside, one that fails one run is flagged, and the policy check is never set aside.
+
 **If it goes differently**
 Diagnosis is a model too. If it picks the wrong surface or scope (for example **Customer** instead of **Shop-wide**), that is the "wrong diagnosis" failure from the brief. Press **Dismiss** and run diagnosis again, or carry on and see whether the gate catches it.
+
+If **Set aside** lists a check, read its reason. When this was checked on a case written by hand, "Refunds the full $66.00" on PM-1009 was set aside as "Conflicts with shop policy: it demands a refund of $66.00 on PM-1009, but at most $59.40 is refundable.", and a rubric demanding a receipt table with skus and tracking numbers "Failed on both reference runs". If you think a check was set aside wrongly, press **Put back**: it rejoins the case and the next gate grades it. **Test this case** runs the whole test again.
 
 ---
 
@@ -174,7 +181,7 @@ The verified gate: **Accepted**, pass rate "86% to 100%", cost per task $0.0005 
 `services/healer/src/gate.ts` ran the suite twice through `services/healer/src/evalRunner.ts`, once per version, two trials per case. A case passes when most of its trials pass. The decision rule is simple and strict: nothing regressed, the pass rate did not drop, and the issue's own case now passes.
 
 **If it goes differently**
-If the gate rejects the note because a check is too strict (brief section 7 notes diagnosis sometimes writes one), open the eval case, press **Edit case**, loosen or remove the check, and press **Save**. Then go back to the rejected proposal and press **Propose again**. It opens a new draft with the same changes, built on the live version; press **Run the gate** on that draft. **Run the gate** is greyed out on the rejected proposal itself, because only a draft can be gated.
+If the gate rejects the note because a check is too strict (brief section 7 notes diagnosis sometimes writes one, and the test in Beat 5 does not catch a check that is too strict only some of the time), open the eval case, press **Edit case**, loosen or remove the check, and press **Save**. Then go back to the rejected proposal and press **Propose again**. It opens a new draft with the same changes, built on the live version; press **Run the gate** on that draft. **Run the gate** is greyed out on the rejected proposal itself, because only a draft can be gated.
 
 ---
 
@@ -304,12 +311,12 @@ Every gate run added an eval run for its base and candidate versions, which fill
 
 **Do this**
 1. On the console home page, in **Autonomy**, press **Approve**.
-2. In **Traffic**, choose **Cancel an order already shipped** in the seeded case drop-down (the text under it says what the case shows) and press **Fire**. Watch **Activity** and the map: blocks pulse as each stage runs. It takes about 50 seconds.
+2. In **Traffic**, choose **Cancel an order already shipped** in the seeded case drop-down (the text under it says what the case shows) and press **Fire**. Watch **Activity** and the map: blocks pulse as each stage runs. It takes about 75 seconds.
 3. Open **Propose**. Under **Approval queue**, read the rationale and press **Approve and deploy**.
-4. Back on the home page, press **Automatic**. Choose **Refund on opened items** and press **Fire**. Watch **Activity** until a line says a new version is live in the shop (about 60 seconds).
+4. Back on the home page, press **Automatic**. Choose **Refund on opened items** and press **Fire**. Watch **Activity** until a line says a new version is live in the shop (a little longer than the first).
 
 **What you should see**
-In Approve mode the verified Activity feed read, in order: "Failed (Cancel only while processing; ...)", "New knowledge issue: Shipped orders cancelled (cancel only while processing)", "New eval case: ...", "Proposed: Add shop note: cancel only while order status is processing", "Accepted ...". Then it stopped: the proposal waited in **Approval queue**. In Automatic mode the feed ran on past the gate to "Version 7 is live in the shop: Add shop note: opened items refunded at 85% (15% restocking fee)". Your version numbers may differ.
+In Approve mode the Activity feed read, in order, when this beat was last performed: "Failed (Cancel only while processing): ...", "Tested 'Cancel request for already-shipped order PM-1013 is declined' on the reference agent (sonnet, shown every shop rule): 2 of 2 runs kept every policy rule and passed every check", "'Cancel request for already-shipped order PM-1013 is declined' catches the failure it came from: ...", "New knowledge issue: Shipped orders cancelled instead of only processing orders", "New eval case: ...", "Proposed: Add shop note: cancel orders only while processing (candidate version 2)", "Accepted ...". Then it stopped: the proposal waited in **Approval queue**. In Automatic mode the feed ran on past the gate to "Version 7 is live in the shop: Add shop note: opened items refunded at 85% (15% restocking fee)". Your version numbers may differ.
 
 **What just happened**
 Both runs were the same graph in `services/healer/src/loop.ts`, which the console map draws. The only difference is the branch after the gate: in Approve it stops, in Automatic it goes on to promote. If the gate rejects a proposal, the loop retries up to twice with a new proposal. The seeded cases are known-tricky customers kept in `services/healer/src/seeds.ts`; they behave as described only on fresh shop data.
@@ -421,13 +428,14 @@ Everything you did answers one of five questions every learning loop must answer
 | What do we change, and for whom? | A shop note, a customer note, a guard, a model tier (Beats 6, 10, 11, 16) |
 | How do we know it is better, and who signs off? | The gate and the autonomy dial (Beats 7, 9, 13) |
 
-The *ratchet* is the one-sentence summary: every failure became a permanent test (Beat 5), and a change was kept only if it passed every test collected so far (Beat 9). You also met the three surfaces at their real speeds: notes were instant and could be scoped to one customer; a guard changed behaviour for everyone; a model change was the slowest and dearest lever. And you met the loops by timescale (brief section 3.4): context in minutes, harness more carefully, model last.
+The *ratchet* is the one-sentence summary: every failure became a permanent test, itself tested before it joined (Beat 5), and a change was kept only if it passed every test collected so far (Beat 9). You also met the three surfaces at their real speeds: notes were instant and could be scoped to one customer; a guard changed behaviour for everyone; a model change was the slowest and dearest lever. And you met the loops by timescale (brief section 3.4): context in minutes, harness more carefully, model last.
 
 **Known limits, seen on the verified run**
 - The judge is a model and can be strict or wrong (Beats 3 and 11).
 - Two trials per case cannot see rare failures, and noise can make a good change look like a regression or a bad one look like a fix.
 - Memory can still rot. Simulated customers now stay consistent with their notes and the proposer edits a note a customer changes (Beat 14), but nothing checks that notes written over many sessions stay consistent with each other.
-- Refunds that are too small, or never issued, break no policy rule. A separate check catches them, but it is only as good as the judge model's reading of the request, which the trace page shows under **Verdict** as "What the customer asked to refund". Items whose return depends on a condition the customer set are left out. Fired four times, "A return that depends on the amount" three times refunded $30.60 for the two bud vases and passed the check, although the customer's condition (less than $40 back) was met and the pendant shade was owed too; the fourth time the agent refunded nothing and the check failed with $30.60 due. Diagnosing that failure wrote an eval case requiring exactly $30.60, so the case encodes the misreading.
+- Refunds that are too small, or never issued, break no policy rule. A separate check catches them, but it is only as good as the judge model's reading of the request, which the trace page shows under **Verdict** as "What the customer asked to refund". Items whose return depends on a condition the customer set are left out. Fired four times, "A return that depends on the amount" three times refunded $30.60 for the two bud vases and passed the check, although the customer's condition (less than $40 back) was met and the pendant shade was owed too; the fourth time the agent refunded nothing and the check failed with $30.60 due. Diagnosing that failure wrote an eval case requiring exactly $30.60, so the case encodes the misreading. Testing a case like that sets the check aside (both reference runs refunded $72.50 when this was checked on a copy of it), which leaves the case with no refund check at all.
+- A new case is tested on only two reference runs, so a check that is too strict only some of the time still joins the suite; a rubric can be set aside because its grader was wrong; and the reference agent is a model too (Beat 5). Set-aside checks stay on the case page and can be put back.
 - The model tier gap is narrow (Beat 16). The router now has both classes to learn from, but on a few dozen examples it learns wording rather than risk, and the gate accepts a router that sends refunds to the small model as long as the pass rate holds (Beat 17).
 
 **Do this**
@@ -444,7 +452,7 @@ The *ratchet* is the one-sentence summary: every failure became a permanent test
 | 2. A conversation becomes a trace | Traces; the agent as a graph; the route one reply took through it | Run, a trace page |
 | 3. The judge | Policy in code the agent never sees; the model judge; verdicts | Judge, the trace's Verdict |
 | 4. A failure caught in the end state | End-state checks | The trace's Environment and Verdict |
-| 5. Diagnosis | Cause, surface, scope; a failure becomes an eval case | Diagnose, an issue, an eval case |
+| 5. Diagnosis | Cause, surface, scope; a failure becomes an eval case, tested before it joins the suite | Diagnose, an issue, an eval case: Tested before joining the suite |
 | 6. A proposal is a diff | Context surface; fix at the cheapest surface | A proposal: Changes, Base against candidate |
 | 7. The gate | Base against candidate, pass rate, cost per task, trials | A proposal's Gate panel, a gate run |
 | 8. Promotion and lineage | Deploying; checking with a new customer; lineage | Approve and deploy, the lineage strip |

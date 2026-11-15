@@ -16,7 +16,7 @@ import {
 import { Healer, MissingKeyError, newId, now } from './console.ts';
 import { startDiagnoseJob } from './diagnose.ts';
 import { caseHistory, startEvalJob } from './evalRunner.ts';
-import { checkSpecSchema } from './evals.ts';
+import { caseValidationSchema, checkSpecSchema } from './evals.ts';
 import { startGateJob } from './gate.ts';
 import { goldenCases } from './golden.ts';
 import { judgeTrace } from './judge.ts';
@@ -31,6 +31,7 @@ import { SEEDED_CASES, startFireJob } from './seeds.ts';
 import { followShop, handleShopEvent, type ShopClient } from './shopLink.ts';
 import { startSimulateJob } from './simulate.ts';
 import { HealerStore, SANDBOX_SOURCES } from './store.ts';
+import { startValidateJob } from './validate.ts';
 
 type Res<K extends keyof HealerApi> = HealerApi[K]['res'];
 
@@ -472,6 +473,7 @@ export function createHealerApp(options: HealerOptions) {
       env,
       checks: input.checks as EvalCase['checks'],
       enabled: true,
+      validation: null,
     };
     store.evalCases.put(evalCase);
     h.activity('gate', `New eval case written by hand: ${evalCase.title}`, { kind: 'evalCase', id: evalCase.id, label: evalCase.title });
@@ -482,11 +484,22 @@ export function createHealerApp(options: HealerOptions) {
   app.patch('/api/healer/evals/:id', async (c) => {
     const evalCase = store.evalCases.get(c.req.param('id'));
     if (!evalCase) throw notFound('Eval case');
-    const patch = await body(c, z.object({ title: z.string().min(1).optional(), checks: checksSchema.optional(), enabled: z.boolean().optional() }));
+    const patch = await body(
+      c,
+      z.object({ title: z.string().min(1).optional(), checks: checksSchema.optional(), enabled: z.boolean().optional(), validation: caseValidationSchema.nullable().optional() }),
+    );
     const updated = store.evalCases.put({ ...evalCase, ...(patch as Partial<EvalCase>) });
     if (patch.checks) store.markChecksEdited(evalCase.id, now());
     h.changed('evalCase');
     return c.json<Res<'PATCH /api/healer/evals/:id'>>(updated);
+  });
+
+  app.post('/api/healer/evals/:id/validate', (c) => {
+    const evalCase = store.evalCases.get(c.req.param('id'));
+    if (!evalCase) throw notFound('Eval case');
+    requireKey();
+    requireLive();
+    return c.json<Res<'POST /api/healer/evals/:id/validate'>>(startValidateJob(h, evalCase.id));
   });
 
   app.post('/api/healer/evals/run', async (c) => {
