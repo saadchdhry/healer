@@ -92,6 +92,12 @@ test('wrongness: policy, disagreement with a reference that kept the rules, and 
   assert.equal(wrongness(makeTrace('c_marcus', (e) => e.addRefund(CLEAN, 1, 'original_payment', 'r'), { error: 'overloaded' }), full), null);
 });
 
+test('wrongness: a refund one cent from the reference is not wrong, two cents is', () => {
+  const t = (amount: number) => makeTrace('c_marcus', (e) => e.addRefund(CLEAN, amount, 'original_payment', 'r'));
+  assert.equal(wrongness(t(40.01), t(40.02)), null);
+  assert.equal(wrongness(t(40), t(40.02)), 'refunded $40.00 to original_payment where the reference refunded $40.02 to original_payment');
+});
+
 test('labelling by risk: refunds and cancellations attempted in any replay, blocked or not; measured failure wins', () => {
   const call = (name: ToolName, blockedByGuard: ToolCallRecord['blockedByGuard'] = null): ToolCallRecord => ({ runId: 'run', name, input: {}, output: {}, blockedByGuard });
   const t = (calls: ToolCallRecord[] = [], act: Parameters<typeof makeTrace>[1] = () => {}) => makeTrace('c_marcus', act, { toolCalls: calls });

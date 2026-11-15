@@ -35,6 +35,13 @@ test('end_state: refunds, status, address, escalation', () => {
   assert.equal(endStateCheck(spec('end_state', { orderId: O.processing, escalated: false }), moved).passed, false);
 });
 
+test('end_state: a refund one cent off passes, two cents off fails', () => {
+  const refunded = makeTrace('c_ava', (e) => e.addRefund(O.cleanRefund, 72.5, 'original_payment', 'r'));
+  assert.equal(endStateCheck(spec('end_state', { orderId: O.cleanRefund, refund: { amount: 72.51 } }), refunded).passed, true);
+  assert.equal(endStateCheck(spec('end_state', { orderId: O.cleanRefund, refund: { amount: 72.49 } }), refunded).passed, true);
+  assert.equal(endStateCheck(spec('end_state', { orderId: O.cleanRefund, refund: { amount: 72.52 } }), refunded).passed, false);
+});
+
 test('tool_sequence: must call, must not call, order', () => {
   const trace = makeTrace('c_ava', () => {}, { toolCalls: [call('issue_refund'), call('get_order')] });
   assert.equal(toolSequenceCheck(spec('tool_sequence', { mustCall: ['get_order'] }), trace).passed, true);

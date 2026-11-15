@@ -54,6 +54,7 @@ export function daysBetween(from: string, to: string): number {
 }
 
 export const CENT = 0.005;
+export const centsApart = (a: number, b: number) => Math.abs(Math.round(a * 100) - Math.round(b * 100));
 const RESTOCKING_KEEP = 0.85;
 export const ESCALATION_THRESHOLD = 150;
 
