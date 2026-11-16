@@ -12,8 +12,12 @@ import { IdLink, JobProgress, Json, Layer, PageHead, VerdictBadge } from '../com
 const tiers: Tier[] = ['haiku', 'sonnet', 'opus'];
 
 const reasonLabel: Record<NonNullable<RouterExample['reason']>, { label: string; detail: string }> = {
-  high_stakes: { label: 'High stakes', detail: 'A replay attempted a refund or a cancellation, whether or not a guard blocked it' },
   measured_failure: { label: 'Measured failure', detail: 'A small tier replay got it wrong where the strong tier kept every rule' },
+  high_stakes: { label: 'High stakes', detail: 'A replay attempted a refund or a cancellation, whether or not a guard blocked it' },
+  customer_asked: {
+    label: 'Customer asked (judge)',
+    detail: "No replay attempted a refund or a cancellation, but the judge's verdict on the original conversation read a request for one",
+  },
 };
 
 export function ModelPage() {
@@ -182,8 +186,8 @@ export function ModelPage() {
                   <div className="hc-panel" role="status" style={{ marginBottom: 12 }}>
                     <strong>Nothing to train on yet.</strong> {trainNote}
                     <p className="hc-muted" style={{ margin: '6px 0 0', fontSize: 12.5 }}>
-                      This is an expected state, not a fault. A router only learns something when some requests carry risk: a replay attempted a refund or a
-                      cancellation, or the small tier failed where the strong one kept every rule.
+                      This is an expected state, not a fault. A router only learns something when some requests carry risk: the small tier failed where the
+                      strong one kept every rule, a replay attempted a refund or a cancellation, or the judge read a request for one in the original conversation.
                       The dataset that was built is listed below.
                     </p>
                   </div>
@@ -271,9 +275,10 @@ export function ModelPage() {
                 aside={`${train.length} train, ${val.length} validation. ${m.dataset.filter((d) => d.needsStrong).length} carry risk and go to the strong tier, ${m.dataset.filter((d) => !d.needsStrong).length} stay on the small one`}
               >
                 <p className="hc-muted" style={{ margin: '0 0 10px', fontSize: 12.5 }}>
-                  Known weakness: a request the agent rightly refuses, such as a refund past the 30-day window, is labelled low risk when no replay attempted the
-                  refund, so the router learns to keep such requests on the small tier; one reaches the strong tier only when its wording happens to match
-                  high-stakes requests, which is no guarantee.
+                  Labels marked "Customer asked (judge)" rest on a model's reading: the judge, on the call it already makes for every live trace, reads
+                  whether the customer asked for a refund or a cancellation, and that reading is stored with the verdict and shown on the trace page. The
+                  other two reasons are decided in code. A request with no verdict yet is labelled from its replays alone. Known weakness: if the judge
+                  misreads a request, its label is wrong, and with a few dozen examples a word-counting classifier can still learn wording that is not risk.
                 </p>
                 {m.dataset.length ? (
                   <table className="hc-table">
@@ -311,7 +316,7 @@ export function ModelPage() {
                     </tbody>
                   </table>
                 ) : (
-                  <Empty>No examples yet. Building the dataset replays past requests on both tiers; a request needs the strong tier when a replay attempted a refund or a cancellation, or when the small one failed where the strong one kept every rule.</Empty>
+                  <Empty>No examples yet. Building the dataset replays past requests on both tiers; a request needs the strong tier when the small one failed where the strong one kept every rule, when a replay attempted a refund or a cancellation, or when the judge read a request for one in the original conversation.</Empty>
                 )}
               </Layer>
               <Layer title="Raw workings" aside={router ? `Router ${router.id}, exactly as stored` : undefined} raw>

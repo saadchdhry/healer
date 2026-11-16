@@ -41,19 +41,19 @@ function strictReason(title: string, base: CaseResult, cand: CaseResult, baseId:
   return parts.join(' ') + (check ? ` ${where}, "${check.label}" failed: ${check.detail}` : '');
 }
 
-// How a routed candidate sends the eval cases that belong to capability issues. Decided by the router's weights
-// alone, so unlike pass rates it does not depend on how the trials happened to fall.
+// How a routed candidate sends the eval cases that belong to capability issues and the strict cases, which move
+// money. Decided by the router's weights alone, so unlike pass rates it does not depend on how the trials happened to fall.
 export interface RoutingCheck {
   easyTier: Tier;
   hardTier: Tier;
-  cases: { caseId: string; score: number; needsStrong: boolean }[];
+  cases: { caseId: string; score: number; needsStrong: boolean; capability: boolean; strict: boolean }[];
   // How many requests in the router dataset it sends to the hard tier, which is where the saving comes from.
   dataset: { size: number; toHard: number };
 }
 
 // Accept only if no case regressed, the pass rate did not drop, (for a proposal fixing an issue) at least one
-// of that issue's eval cases passes on the candidate, and (for a routed model) every capability case goes to the
-// strong tier. A change made only to save money (`costFirst`) is judged the same way, but its reasons lead with
+// of that issue's eval cases passes on the candidate, and (for a routed model) every capability case and every strict
+// case goes to the strong tier. A change made only to save money (`costFirst`) is judged the same way, but its reasons lead with
 // what it does to cost per task.
 export function decide(
   base: EvalRun,
@@ -79,7 +79,10 @@ export function decide(
   const issueFixed = issueCases.filter((r) => r.passed);
   if (issueCases.length && !issueFixed.length) failures.push("none of the issue's own eval cases passes");
   const misrouted = routing?.cases.filter((c) => !c.needsStrong) ?? [];
-  if (misrouted.length) failures.push(`${misrouted.length} capability case${misrouted.length > 1 ? 's are' : ' is'} routed to ${routing!.easyTier}`);
+  for (const kind of ['capability', 'strict'] as const) {
+    const n = misrouted.filter((c) => c[kind]).length;
+    if (n) failures.push(`${n} ${kind} case${n > 1 ? 's are' : ' is'} routed to ${routing!.easyTier}`);
+  }
 
   const n = common.length;
   const costChange = base.costPerTaskUsd ? ` (${candidate.costPerTaskUsd >= base.costPerTaskUsd ? '+' : ''}${pct(candidate.costPerTaskUsd / base.costPerTaskUsd - 1)})` : '';
@@ -105,13 +108,20 @@ export function decide(
   if (routing) {
     const score = (c: RoutingCheck['cases'][number]) => `router score ${c.score.toFixed(2)}`;
     for (const c of misrouted) {
-      reasons.push(`Misrouted: "${title(c.caseId)}" belongs to a capability issue, but the router sends it to ${routing.easyTier} (${score(c)}).`);
+      const why = [c.capability && 'belongs to a capability issue', c.strict && 'is strict (it moves money)'].filter(Boolean).join(' and ');
+      reasons.push(`Misrouted: "${title(c.caseId)}" ${why}, but the router sends it to ${routing.easyTier} (${score(c)}).`);
     }
-    if (!misrouted.length) {
+    const none = {
+      capability: 'Routing: no enabled eval case belongs to a capability issue, so routing was not checked case by case.',
+      strict: 'Routing: no enabled eval case is strict, so where money-moving cases go was not checked.',
+    };
+    for (const kind of ['capability', 'strict'] as const) {
+      const cases = routing.cases.filter((c) => c[kind]);
+      if (cases.some((c) => !c.needsStrong)) continue;
       reasons.push(
-        routing.cases.length
-          ? `Routing: all ${routing.cases.length} capability case${routing.cases.length > 1 ? 's go' : ' goes'} to ${routing.hardTier} (${routing.cases.map(score).join(', ')}).`
-          : 'Routing: no enabled eval case belongs to a capability issue, so routing was not checked case by case.',
+        cases.length
+          ? `Routing: all ${cases.length} ${kind} case${cases.length > 1 ? 's go' : ' goes'} to ${routing.hardTier} (${cases.map(score).join(', ')}).`
+          : none[kind],
       );
     }
     const { size, toHard } = routing.dataset;
@@ -188,8 +198,9 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
             hardTier: model.hardTier,
             cases: store.evalCases
               .list()
-              .filter((c) => c.enabled && c.issueId && store.issues.get(c.issueId)?.cause === 'capability')
-              .map((c) => ({ caseId: c.id, ...predictRoute(model.router, c.message) })),
+              .filter((c) => c.enabled)
+              .map((c) => ({ caseId: c.id, capability: !!c.issueId && store.issues.get(c.issueId)?.cause === 'capability', strict: c.strict, ...predictRoute(model.router, c.message) }))
+              .filter((c) => c.capability || c.strict),
             dataset: { size: store.routerDataset().length, toHard: store.routerDataset().filter((e) => predictRoute(model.router, e.text).needsStrong).length },
           }
         : null;

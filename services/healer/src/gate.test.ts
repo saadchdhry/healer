@@ -87,7 +87,7 @@ test('a change made only to save money leads with cost per task', () => {
 });
 
 test('a routed candidate is rejected when it sends a capability case to the small model, whatever the trials say', () => {
-  const routing = { easyTier: 'haiku' as const, hardTier: 'sonnet' as const, cases: [{ caseId: 'hard', score: 0.12, needsStrong: false }, { caseId: 'other', score: 0.91, needsStrong: true }], dataset: { size: 40, toHard: 15 } };
+  const routing = { easyTier: 'haiku' as const, hardTier: 'sonnet' as const, cases: [{ caseId: 'hard', score: 0.12, needsStrong: false, capability: true, strict: false }, { caseId: 'other', score: 0.91, needsStrong: true, capability: true, strict: false }], dataset: { size: 40, toHard: 15 } };
   const d = decide(run(0, [['hard', true], ['other', true]], 0.01), run(7, [['hard', true], ['other', true]], 0.001), null, title, { costFirst: true, routing });
   assert.equal(d.decision, 'reject');
   assert.match(d.reasons[0]!, /^Rejected: cost per task would go from .+, but 1 capability case is routed to haiku\.$/);
@@ -96,6 +96,32 @@ test('a routed candidate is rejected when it sends a capability case to the smal
   assert.equal(ok.decision, 'accept');
   assert.ok(ok.reasons.includes('Routing: all 1 capability case goes to sonnet (router score 0.91).'));
   assert.ok(ok.reasons.includes('Routing share: of the 40 requests in the router dataset, it sends 15 (38%) to sonnet and the other 25 to haiku.'));
+});
+
+test('a routed candidate is rejected when it sends a strict case to the small model, and accepted when strict cases go to the hard tier', () => {
+  const route = (caseId: string, score: number, kind: { capability?: boolean; strict?: boolean }) => ({ caseId, score, needsStrong: score >= 0.5, capability: false, strict: false, ...kind });
+  const routing = (...cases: ReturnType<typeof route>[]) => ({ easyTier: 'haiku' as const, hardTier: 'sonnet' as const, cases, dataset: { size: 40, toHard: 15 } });
+  const base = run(0, [['refund', true], ['cancel', true], ['hard', true]], 0.01);
+  const cand = run(7, [['refund', true], ['cancel', true], ['hard', true]], 0.001);
+
+  const d = decide(base, cand, null, title, { costFirst: true, routing: routing(route('refund', 0.31, { strict: true }), route('cancel', 0.77, { strict: true }), route('hard', 0.9, { capability: true })) });
+  assert.equal(d.decision, 'reject', 'every trial passed, but a money-moving case goes to the small tier');
+  assert.match(d.reasons[0]!, /^Rejected: cost per task would go from .+, but 1 strict case is routed to haiku\.$/);
+  assert.ok(d.reasons.includes('Misrouted: "case refund" is strict (it moves money), but the router sends it to haiku (router score 0.31).'));
+  assert.ok(d.reasons.includes('Routing: all 1 capability case goes to sonnet (router score 0.90).'), 'the capability check still runs');
+  assert.ok(!d.reasons.some((r) => r.startsWith('Routing: all') && r.includes('strict')));
+
+  const both = decide(base, cand, null, title, { costFirst: true, routing: routing(route('hard', 0.2, { capability: true, strict: true })) });
+  assert.match(both.reasons[0]!, /but 1 capability case is routed to haiku, and 1 strict case is routed to haiku\.$/);
+  assert.ok(both.reasons.includes('Misrouted: "case hard" belongs to a capability issue and is strict (it moves money), but the router sends it to haiku (router score 0.20).'));
+
+  const ok = decide(base, cand, null, title, { costFirst: true, routing: routing(route('refund', 0.81, { strict: true }), route('cancel', 0.77, { strict: true })) });
+  assert.equal(ok.decision, 'accept', ok.reasons.join('\n'));
+  assert.ok(ok.reasons.includes('Routing: all 2 strict cases go to sonnet (router score 0.81, router score 0.77).'));
+  assert.ok(ok.reasons.includes('Routing: no enabled eval case belongs to a capability issue, so routing was not checked case by case.'));
+
+  const none = decide(base, cand, null, title, { costFirst: true, routing: routing() });
+  assert.ok(none.reasons.includes('Routing: no enabled eval case is strict, so where money-moving cases go was not checked.'));
 });
 
 const trial = (passed: boolean): TrialResult => ({

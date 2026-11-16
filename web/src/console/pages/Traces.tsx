@@ -289,6 +289,16 @@ export function TraceDetailPage() {
               <>
                 <CheckList checks={verdict.checks} />
                 <AskedToRefund request={verdict.refundRequest} before={trace.envBefore} />
+                <div className="hc-panel" style={{ marginTop: 10 }}>
+                  <h3>Whether the customer asked to cancel</h3>
+                  <p className={verdict.cancelRequest ? undefined : 'hc-muted'} style={{ margin: 0 }}>
+                    {verdict.cancelRequest ? 'The judge read a request to cancel an order.' : 'No request to cancel an order was read from this conversation.'}
+                  </p>
+                  <p className="hc-sub" style={{ margin: '6px 0 0' }}>
+                    Read by the judge on the same call. It checks nothing here: the router's dataset uses it, with the refund request above, to label a request
+                    as needing the strong tier when no replay attempted a refund or a cancellation.
+                  </p>
+                </div>
               </>
             ) : (
               <Empty>Not judged yet. The judge runs on every trace shortly after it arrives, or use Judge again.</Empty>
