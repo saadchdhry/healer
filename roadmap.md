@@ -97,6 +97,158 @@ Under $0.50: two or three fired seeded cases with their judge calls. The restore
 
 ---
 
+## 8. Separate the sources in the Traffic card
+
+**Status:** waiting on an owner decision. The owner suggested tabs; the recommendation is labelled sections. The owner has not chosen between them, and nothing is built. Items 8 and 9 change the same card and the same beats, so decide them together.
+
+### Why
+
+The owner wrote, on 2026-11-14: "Improve the visual separation of Traffic sources. I think, Simulated, Seed, and Shop can be in three tabs within the Traffic card. The "Shop" tab just shows "Open shop front" link."
+
+The card mixes several kinds of traffic with nothing to tell them apart, and the one source a person drives by hand, the shop front, is not in it at all.
+
+### Current behaviour
+
+- The card is `TrafficPanel` in `web/src/console/pages/Home.tsx`, headed "Traffic", in the left column of the console home page under **Live in the shop** and **Autonomy**.
+- It holds three rows with no headings, one under the other: a number and **Send simulated customers**; the seeded case drop-down with **Fire**, a "Shows: ..." line from the case's `teaches` and the warning that recommends a factory reset (which item 5 replaces); and a number with **Run red team probe**, followed by "A probe asks the same question two ways in a sandbox and flags answers that disagree. See the findings."
+- The card has no link to the shop front. The console sidebar footer has one, "Open the shop front", in `ConsoleLayout.tsx`, opening `/` in a new tab.
+- The console has no tab component. The nearest control is the `hc-seg` segmented buttons used by the **Autonomy** card and the Model page.
+- The readable source names are already fixed in `sourceWord` in `web/src/lib/format.ts`: "Shop front", "Simulated customers", "Seeded cases". The Traces page diagram (`TraceSources.tsx`) uses them too.
+
+### The two designs
+
+1. **The owner's suggestion: three tabs.** Simulated, Seed and Shop as tabs inside the Traffic card; the Shop tab shows only an "Open shop front" link.
+2. **Recommended on 2026-11-14: three labelled sections in the one card.** Headed "Shop front" (with the link), "Simulated customers" and "Seeded cases", using the names in `sourceWord`. The reasons given: tabs would hide two of the three controls at any moment; Beats 13 and 14 use the seeded cases and then the simulated customers one after the other, so a tab would have to be switched mid-walkthrough; and a tab that holds only one link is a lot of frame for little content. Sections give the same separation with nothing hidden.
+
+**Open:** the owner has not chosen between these. Whichever is chosen, the red team row's place depends on item 9: if red teaming stays in Traffic it becomes a fourth tab or section; if item 9 is built it leaves the card.
+
+### Where the code is
+
+| What | File |
+|---|---|
+| The Traffic card | `TrafficPanel` in `web/src/console/pages/Home.tsx` |
+| The existing shop front link | `web/src/console/ConsoleLayout.tsx` |
+| Source names | `sourceWord` in `web/src/lib/format.ts` |
+| Segmented buttons, card styles | `web/src/console/console.css` (`hc-seg`, `hc-panel`) |
+| Beats that describe the card | `demo-beats.md` Beat 1 (step 3 names the cards), Beat 13 (step 2, seeded case), Beat 14 (step 2, simulated customers), Beat 15 (step 1, red team probe) |
+
+### Done when
+
+- The chosen design is in `TrafficPanel`, every control in it works as before, and the shop front link opens `/` in a new tab.
+- Beats 1, 13, 14 and 15 are performed again on the isolated copy (the `healer-verify` launch entry) and only then rewritten where their wording of the card changed, as `AGENTS.md` requires.
+- `npm run typecheck` and `npm run build -w @healer/web` pass.
+
+### Cost
+
+The change itself makes no model call. Performing Beats 13 to 15 again costs roughly $0.75 to $1.00 (one fired seeded case through the loop, six simulated customers, three red team probes), shared with item 9 if both are built together.
+
+---
+
+## 9. Give red teaming its own card
+
+**Status:** waiting on an owner decision. The recommendation is its own card; the owner has not decided, and nothing is built. Changes the same card and beats as item 8, so decide them together.
+
+### Why
+
+The owner asked, on 2026-11-14: "Would you say "Red teaming" belongs within Traffic? If yes, put it in it's own tab. If not, put it in it's own card."
+
+### Current behaviour
+
+- **Run red team probe** is the third row of `TrafficPanel` in `web/src/console/pages/Home.tsx` (see item 8), with a number of pairs (1 to 20, default 3) and a link to the findings.
+- A probe (`probeOnce` in `services/healer/src/redteam.ts`) never reaches the shop. It takes a first customer message from recent shop, simulated or seeded traffic (`pickProbes`), has a model reword it, runs both wordings in a sandbox on a copy of that trace's starting records (`sandboxRun`, source `redteam`), and decides by whether the two disagree: differences found in code (write tools called, changes to the records) and a model comparison (`COMPARE_SYSTEM`). It does not use the judge (`JUDGE_SYSTEM`). Only when they disagree do the policy checks, or failing that the comparison, pick the wrong side, which gets a failed verdict and is diagnosed.
+- The Judge page already presents it as a way of judging: the layer "Asking the same question two ways" in `web/src/console/pages/Judge.tsx`, with the findings table and the page "Red team findings". The probe's activity lines are logged under the judge stage.
+- Two empty-state messages on the Judge page point to the current place: "Run a red team probe from the map page ..." and "Run a red team probe from the traffic panel on the map page."
+- The Traces page counts red team probes in the sandbox group, not with the three sources that go through the shop.
+
+### The recommendation and its reasons
+
+Recommended on 2026-11-14: **its own card, not a Traffic tab.** Everything else in Traffic is a customer message that goes through the live shop and is graded by the judge. A red team probe is a way of judging, not a source of customers: it runs in a sandbox and decides by disagreement between two answers. The Judge page and Beat 15 ("Red teaming without a judge of truth") already treat it that way. A separate "Red team" card also gives Traffic a clean meaning: messages that go through the shop.
+
+The change, if chosen: move the probe row and its explanation line out of `TrafficPanel` into a new card on the console home page, headed "Red team", and update the two Judge page empty states to name it.
+
+**Open:** the owner has not decided. If the answer is that red teaming belongs in Traffic, it becomes a fourth tab or section of item 8's design instead.
+
+### Where the code is
+
+| What | File |
+|---|---|
+| The probe row today, and the new card | `web/src/console/pages/Home.tsx` |
+| The probe | `services/healer/src/redteam.ts` |
+| Judge page layer, findings page, empty states | `web/src/console/pages/Judge.tsx` |
+| Beats that describe it | `demo-beats.md` Beat 1 (step 3 lists the home page cards), Beat 15 (step 1 says "in **Traffic**") |
+
+### Done when
+
+- The probe runs from its new place exactly as before, and the Judge page empty states name it.
+- Beats 1 and 15 are performed again on the isolated copy and only then rewritten, as `AGENTS.md` requires.
+- `npm run typecheck` and `npm run build -w @healer/web` pass.
+
+### Cost
+
+The move makes no model call. Performing Beat 15 again with three probes costs roughly $0.25 to $0.50, and is covered by item 8's figure if both are built together.
+
+---
+
+## 10. A scope check so the agent refuses off-topic requests (guardrails)
+
+**Status:** waiting on an owner decision. The design below was proposed on 2026-11-14; the owner has not said whether to build it. A related note of theirs was left unfinished (see the last section).
+
+### Why
+
+The owner wrote, on 2026-11-14: "Guardrails concept: Where do guardrails fit in the self-learning agent in general." with the example "The agent is not restricted to it's defined job. I was able to manage for the agent to tell me food recipies, where is should have denied off-topic request."
+
+### Where guardrails sit in this system today
+
+- **Guards** stop an action in tool code before it happens (`packages/agent/src/tools.ts`, listed on the Harness page). They act only on tool calls.
+- **The system prompt and notes** only ask. The factory prompt (`factoryVersion()` in `packages/agent/src/supportAgent.ts`) says "Help customers with their orders" and nothing about declining other requests. `REFUSAL_REPLY` in the same file is used only when the model stops with a refusal of its own, not for off-topic requests.
+- **The policy rules** in `services/healer/src/policy.ts` and **the judge's rubric** (truthful, grounded, customer notes, in `JUDGE_SYSTEM` in `services/healer/src/judge.ts`) catch a bad reply afterwards. A caught failure is what the loop turns into a new note, prompt line or guard.
+- **The gate and the autonomy dial** guard the changes themselves.
+- `brief.md` section 1 already names guardrails among the "smaller models at the edges" of the model surface; none is built.
+
+### Why the recipes got through
+
+Nothing checks scope. Every policy rule looks only at changes to the records; guards act only on tool calls; and the grounded item of the rubric allows "hedged common knowledge that is not about this shop", so the judge called the recipes common knowledge. No failed check means nothing to diagnose. From the owner's local data, as read on 2026-11-14: a pancake request as Ava was in fact refused (and passed). The recipes went to Lena in the herb seed booklet chat on version 3, after she declined a hand-off (traces tr_1adb749b and tr_e0c77142), and both passed.
+
+### The proposed change (the smallest one)
+
+1. **A fourth item in the judge's rubric**, "The reply stays within the shop's support job": declining politely passes, giving the off-topic content fails. Add it to `JUDGE_SYSTEM` and `judgeSchema`, and push it as a rubric check in `judgeTrace` next to `judge:truthful` and `judge:grounded`. Its failure detail is worded like a policy rule, since the proposer learns the rule only from that wording.
+2. **List it on the Judge page beside the policy rules.** That table is built from `POLICY_RULES` (via `GET /api/healer/rules`), and each entry there needs a code check, so show the scope rule as its own line rather than adding it to `POLICY_RULES`.
+3. **Leave the rest to the loop.** Diagnosis files the first failure, the proposer writes the scope rule from the failed check's wording (most likely a shop-wide note, as in Beat 6), and the gate tests it against the eval case diagnosis wrote.
+
+The rule lives only in the judge's instructions, which the agent never sees. It is not put into the factory prompt and not handed to the proposer. It costs a few tokens on the judge call already made for every live trace.
+
+### Point to settle when building
+
+A new eval case is tested on a reference agent (`referenceVersion` in `services/healer/src/validate.ts`): the live version plus a note listing every rule in `POLICY_RULES`, on the stronger tier. The scope rule would not be in that note, so the reference agent may give the off-topic content too, and a check like "Declines the recipe request" would then be set aside as "failed on both reference runs", leaving the case unable to catch its failure. Decide whether the reference note also lists the scope rule. That note exists only in memory for the length of one test and never reaches a stored version or the proposer, so adding it there keeps the rule away from the agent.
+
+### Where the code is
+
+| What | File |
+|---|---|
+| Rubric, schema, checks | `JUDGE_SYSTEM`, `judgeSchema`, `judgeTrace` in `services/healer/src/judge.ts` |
+| Judge page, policy rules table | `web/src/console/pages/Judge.tsx` |
+| Reference agent for new eval cases | `referenceVersion` in `services/healer/src/validate.ts` |
+| Factory prompt (not to be changed for this) | `factoryVersion()` in `packages/agent/src/supportAgent.ts` |
+| Concept map | `web/src/console/ConceptMap.tsx` |
+| Tests | `services/healer/src/judge.test.ts`, `services/healer/src/validate.test.ts` |
+
+### Done when
+
+- A unit test with `ScriptedLlm`: a judge output that fails the new item gives a failed verdict with the new check; one that passes it adds a passing check.
+- In a live run on the isolated copy with autonomy on manual: ask the agent for a recipe in the shop front; the verdict fails the scope check; diagnosis files it and writes an eval case whose scope check survives testing; the proposal is a note written from the failed check's wording; the gate accepts it; asking again gets a polite refusal that passes.
+- `npm run typecheck` and `npm test` pass, and the Judge page and `brief.md` describe the new check.
+
+### Cost
+
+About $0.50 to $0.75 for the live run: a few shop chats with their judge calls, one diagnosis with its case testing, one proposal and one gate at 2 trials per case. The extra rubric item adds only a few tokens to each judge call after that.
+
+### Still open
+
+- **Whether to build it.** The owner was asked on 2026-11-14 whether to build this now or put it on the roadmap, and has not answered. It is recorded here so the question is not lost.
+- **The unfinished note.** Just above the guardrails note the owner wrote "A map view of the concepts:" and nothing more. The earlier reply guessed it might run on into the guardrails note and mean showing guardrails on the concept map, but the owner has not said. Today the concept map (`ConceptMap.tsx`, at the top of the console home page) has the five loop blocks (Run, Judge, Diagnose, Propose, Gate), the three surfaces (Context, Harness, Model) and the two foundations (Traces, Eval suite); guards appear only in the Harness block's caption, "Prompt, tools, guards. Affects everyone", and nothing on it shows where guardrails sit. Ask the owner what the note was going to say before building anything for it.
+
+---
+
 ## Defects to fix
 
 Smaller than the items above, so each is written as: what happens, how to see it, where the code is, and a suggested fix. The suggested fix is a starting point, not a decision. These were noticed on 2026-11-13 while fixing the first batch of defects (see "Done").

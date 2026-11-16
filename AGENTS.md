@@ -1,6 +1,6 @@
 # Healer: agent instructions
 
-At the start of a session, read `notes.md` (the owner's git-ignored inbox) and act on every note without a reply, following the rules at its top.
+At the start of a session, if `notes.md` exists (the owner's git-ignored inbox), read it and act on every note without a reply. Never edit the owner's words: reply on an indented line under the note, starting with "Agent:" and the date, and move a note that is dealt with, with its reply, to a "Handled" section at the bottom. A roadmap request gets written up in `roadmap.md`, and the reply says which item it became.
 
 ## Never disturb the owner's running demo
 
