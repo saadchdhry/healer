@@ -1,6 +1,6 @@
-import { predictRoute, type CaseResult, type EvalRun, type GateRun, type Job, type Proposal, type Tier } from '@healer/agent';
+import { predictRoute, type CaseResult, type EvalRun, type GateRun, type Job, type Proposal, type Recheck, type Tier } from '@healer/agent';
 import { newId, now, type Healer } from './console.ts';
-import { runSuite } from './evalRunner.ts';
+import { runPlans, runSuite, type TrialPlan } from './evalRunner.ts';
 import { ChangeError, discardProposal, isOpenProposal, preferenceScopeRefusal, proposeAgain } from './propose.ts';
 
 export interface GateDecision {
@@ -28,7 +28,7 @@ function strictReason(title: string, base: CaseResult, cand: CaseResult, baseId:
   const side = (r: CaseResult, v: number) => {
     if (r.passed) return `passed ${r.trials.length} of ${r.trials.length} trials on version ${v}`;
     const skipped = trials - r.trials.length;
-    return `failed trial ${r.trials.findIndex((t) => !t.passed) + 1} on version ${v}${skipped ? `, so its other ${skipped} were skipped` : ''}`;
+    return `failed trial ${r.trials.findIndex((t) => !t.passed) + 1} on version ${v}${skipped ? `, so ${skipped > 1 ? `its other ${skipped} were` : 'its one remaining trial was'} skipped` : ''}`;
   };
   const sides = base.passed && cand.passed ? `passed ${trials} of ${trials} trials on version ${baseId} and on version ${candId}` : `${side(base, baseId)}, and ${side(cand, candId)}`;
   const parts = [
@@ -54,20 +54,24 @@ export interface RoutingCheck {
 // Accept only if no case regressed, the pass rate did not drop, (for a proposal fixing an issue) at least one
 // of that issue's eval cases passes on the candidate, and (for a routed model) every capability case and every strict
 // case goes to the strong tier. A change made only to save money (`costFirst`) is judged the same way, but its reasons lead with
-// what it does to cost per task.
+// what it does to cost per task. A case run a second time (`rechecks`) is judged on its second round alone, and is never
+// counted as fixed.
 export function decide(
   base: EvalRun,
   candidate: EvalRun,
   issueCaseIds: string[] | null,
   title: (caseId: string) => string,
-  { costFirst = false, routing = null }: { costFirst?: boolean; routing?: RoutingCheck | null } = {},
+  { costFirst = false, routing = null, rechecks = [] }: { costFirst?: boolean; routing?: RoutingCheck | null; rechecks?: Recheck[] } = {},
 ): GateDecision {
-  const baseBy = new Map(base.results.map((r) => [r.caseId, r]));
-  const common = candidate.results.filter((r) => baseBy.has(r.caseId));
+  const again = new Map(rechecks.map((r) => [r.caseId, r]));
+  const firstBase = new Map(base.results.map((r) => [r.caseId, r]));
+  const baseBy = new Map(base.results.map((r) => [r.caseId, again.get(r.caseId)?.base ?? r]));
+  const candidateResults = candidate.results.map((r) => again.get(r.caseId)?.candidate ?? r);
+  const common = candidateResults.filter((r) => baseBy.has(r.caseId));
   const basePassed = common.filter((r) => baseBy.get(r.caseId)!.passed).length;
   const candPassed = common.filter((r) => r.passed).length;
   const regressed = common.filter((r) => baseBy.get(r.caseId)!.passed && !r.passed);
-  const fixed = common.filter((r) => !baseBy.get(r.caseId)!.passed && r.passed);
+  const fixed = common.filter((r) => !baseBy.get(r.caseId)!.passed && r.passed && !again.has(r.caseId));
   const trials = (r: CaseResult) => `${r.trials.filter((t) => t.passed).length} of ${r.trials.length} trials passed`;
 
   const reasons: string[] = [];
@@ -75,7 +79,7 @@ export function decide(
   if (regressed.length) failures.push(`${regressed.length} case${regressed.length > 1 ? 's' : ''} that passed before now fail${regressed.length > 1 ? '' : 's'}`);
   if (candPassed < basePassed) failures.push('the pass rate dropped');
 
-  const issueCases = issueCaseIds ? candidate.results.filter((r) => issueCaseIds.includes(r.caseId)) : [];
+  const issueCases = issueCaseIds ? candidateResults.filter((r) => issueCaseIds.includes(r.caseId)) : [];
   const issueFixed = issueCases.filter((r) => r.passed);
   if (issueCases.length && !issueFixed.length) failures.push("none of the issue's own eval cases passes");
   const misrouted = routing?.cases.filter((c) => !c.needsStrong) ?? [];
@@ -131,8 +135,19 @@ export function decide(
       );
     }
   }
-  for (const r of common.filter((r) => r.rule === 'every' && candidate.strictTrials)) {
-    reasons.push(strictReason(title(r.caseId), baseBy.get(r.caseId)!, r, base.versionId, candidate.versionId, candidate.strictTrials!));
+  for (const r of candidate.results.filter((r) => firstBase.has(r.caseId) && r.rule === 'every' && candidate.strictTrials)) {
+    reasons.push(strictReason(title(r.caseId), firstBase.get(r.caseId)!, r, base.versionId, candidate.versionId, candidate.strictTrials!));
+  }
+  for (const r of rechecks) {
+    const side = (x: CaseResult, v: number) => `${x.passed ? 'passed' : 'failed'} on version ${v} (${trials(x)})`;
+    const first = `Ran again: "${title(r.caseId)}" passed on version ${base.versionId} (${trials(firstBase.get(r.caseId)!)}) and failed on version ${candidate.versionId} (${trials(candidate.results.find((c) => c.caseId === r.caseId)!)}) in the first round.`;
+    const second = `In the second round it ${side(r.base, base.versionId)} and ${side(r.candidate, candidate.versionId)}`;
+    const conclusion = !r.base.passed
+      ? `so the case fails on the base too and cannot show a regression${r.candidate.passed ? ', and it is not counted as fixed' : ''}`
+      : r.candidate.passed
+        ? 'so the first failure is treated as run-to-run variation and not counted as a regression'
+        : 'so it failed twice and counts as a regression';
+    reasons.push(`${first} ${second}, ${conclusion}.`);
   }
   for (const r of regressed) {
     reasons.push(`Regressed: "${title(r.caseId)}" passed on version ${base.versionId} and fails on version ${candidate.versionId} (${trials(r)}).${failingDetail(r)}`);
@@ -162,6 +177,7 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
     regressedCaseIds: [],
     decision: 'pending',
     reasons: [],
+    rechecks: [],
   };
   store.gateRuns.put(gateRun);
   store.proposals.put({ ...proposal, status: 'gating', gateRunId: gateRun.id });
@@ -177,17 +193,21 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
     const strict = JSON.stringify(store.versions.get(proposal.baseVersionId)!.model) !== JSON.stringify(model);
     let baseRun: EvalRun;
     let candidateRun: EvalRun;
+    const rechecks: Recheck[] = [];
     try {
       // The base run usually comes back at once from an earlier run of the live version.
       baseRun = await runSuite(h, proposal.baseVersionId, onProgress, undefined, { strict });
       gateRun.baseRunId = baseRun.id;
       store.gateRuns.put(gateRun);
       candidateRun = await runSuite(h, proposal.candidateVersionId, onProgress, undefined, { strict });
+      gateRun.candidateRunId = candidateRun.id;
+      store.gateRuns.put(gateRun);
+      rechecks.push(...(await runRegressedAgain(h, baseRun, candidateRun, onProgress)));
     } catch (err) {
       if (store.proposals.get(proposalId)) store.proposals.put({ ...store.proposals.get(proposalId)!, status: 'draft' });
       throw err;
     }
-    gateRun.candidateRunId = candidateRun.id;
+    gateRun.rechecks = rechecks;
 
     const issueCaseIds = issue ? issue.evalCaseIds.filter((id) => store.evalCases.get(id)?.enabled) : null;
     const costFirst = !issue && proposal.changes.every((c) => c.surface === 'model');
@@ -204,7 +224,7 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
             dataset: { size: store.routerDataset().length, toHard: store.routerDataset().filter((e) => predictRoute(model.router, e.text).needsStrong).length },
           }
         : null;
-    Object.assign(gateRun, decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id, { costFirst, routing }));
+    Object.assign(gateRun, decide(baseRun, candidateRun, issueCaseIds, (id) => store.evalCases.get(id)?.title ?? id, { costFirst, routing, rechecks }));
   }
   store.gateRuns.put(gateRun);
 
@@ -223,6 +243,33 @@ export async function gateProposal(h: Healer, proposalId: string, onProgress?: (
   return gateRun;
 }
 
+// Runs each case that passed on the base and failed on the candidate once more on both versions, under the rule and
+// trial count the suite runs used for it, so one unlucky round alone cannot reject a change.
+async function runRegressedAgain(h: Healer, base: EvalRun, candidate: EvalRun, onProgress?: (done: number, total: number) => void): Promise<Recheck[]> {
+  const { store } = h;
+  const regressed = candidate.results.filter((r) => !r.passed && base.results.find((b) => b.caseId === r.caseId)?.passed);
+  if (!regressed.length) return [];
+  const titles = regressed.map((r) => `"${store.evalCases.get(r.caseId)!.title}"`).join(', ');
+  h.activity(
+    'gate',
+    `Running ${regressed.length > 1 ? `${regressed.length} cases` : 'a case'} again on version ${base.versionId} and version ${candidate.versionId} before deciding, because ${regressed.length > 1 ? 'they' : 'it'} passed on the base and failed on the candidate: ${titles}`,
+  );
+  const versions = { base: store.versions.get(base.versionId)!, candidate: store.versions.get(candidate.versionId)! };
+  const plans: TrialPlan[] = regressed.flatMap((r) =>
+    (['base', 'candidate'] as const).map((side) => ({
+      key: `${side}:${r.caseId}`,
+      version: versions[side],
+      evalCase: store.evalCases.get(r.caseId)!,
+      rule: r.rule,
+      trials: r.rule === 'every' ? candidate.strictTrials! : candidate.trialsPerCase,
+    })),
+  );
+  const results = new Map<string, CaseResult>();
+  await runPlans(h, h.epoch, plans, (plan, result) => results.set(plan.key, result), onProgress);
+  h.changed('trace');
+  return regressed.map((r) => ({ caseId: r.caseId, base: results.get(`base:${r.caseId}`)!, candidate: results.get(`candidate:${r.caseId}`)! }));
+}
+
 // Whether every enabled eval case of the gated proposal's issue failed on the candidate.
 export function issueCasesStillFail(h: Healer, gateRun: GateRun): boolean {
   const { store } = h;
@@ -230,7 +277,7 @@ export function issueCasesStillFail(h: Healer, gateRun: GateRun): boolean {
   const run = gateRun.candidateRunId ? store.evalRuns.get(gateRun.candidateRunId) : null;
   if (!issueId || !run) return false;
   const caseIds = store.issues.get(issueId)!.evalCaseIds.filter((id) => store.evalCases.get(id)?.enabled);
-  const results = run.results.filter((r) => caseIds.includes(r.caseId));
+  const results = run.results.filter((r) => caseIds.includes(r.caseId)).map((r) => gateRun.rechecks?.find((x) => x.caseId === r.caseId)?.candidate ?? r);
   return results.length > 0 && results.every((r) => !r.passed);
 }
 

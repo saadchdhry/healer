@@ -124,6 +124,49 @@ test('a routed candidate is rejected when it sends a strict case to the small mo
   assert.ok(none.reasons.includes('Routing: no enabled eval case is strict, so where money-moving cases go was not checked.'));
 });
 
+const twoTrials = (caseId: string, passes: number): CaseResult => caseResult(caseId, [0, 1].map((i) => ({ ...result(caseId, i < passes).trials[0]! })), 'majority');
+
+test('a case that regressed in the first round and passes on the candidate the second time is accepted as run-to-run variation, and is not fixed', () => {
+  const base = run(0, [['a', true], ['clean', true]]);
+  const cand = run(1, [['a', true], ['clean', false]]);
+  const rechecks = [{ caseId: 'clean', base: twoTrials('clean', 2), candidate: twoTrials('clean', 2) }];
+  const d = decide(base, cand, null, title, { rechecks });
+  assert.equal(d.decision, 'accept', d.reasons.join('\n'));
+  assert.deepEqual([d.regressedCaseIds, d.fixedCaseIds], [[], []]);
+  assert.ok(d.reasons.includes('Pass rate: 100% (2 of 2 cases) on version 0, 100% (2 of 2) on version 1 (no change).'), 'the second round replaces the first in the pass rate');
+  assert.ok(
+    d.reasons.includes(
+      'Ran again: "case clean" passed on version 0 (1 of 1 trials passed) and failed on version 1 (0 of 1 trials passed) in the first round. In the second round it passed on version 0 (2 of 2 trials passed) and passed on version 1 (2 of 2 trials passed), so the first failure is treated as run-to-run variation and not counted as a regression.',
+    ),
+    d.reasons.join('\n'),
+  );
+  assert.ok(!d.reasons.some((r) => r.startsWith('Regressed:') || r.startsWith('Fixed:')));
+});
+
+test('a case that fails on the candidate again in the second round is a regression, with the failing check from the second round', () => {
+  const second = twoTrials('clean', 1);
+  second.trials[1]!.checks[0]!.detail = 'Second round: the run issued no refund.';
+  const d = decide(run(0, [['clean', true]]), run(1, [['clean', false]]), null, title, { rechecks: [{ caseId: 'clean', base: twoTrials('clean', 2), candidate: second }] });
+  assert.equal(d.decision, 'reject');
+  assert.deepEqual(d.regressedCaseIds, ['clean']);
+  assert.match(d.reasons[0]!, /^Rejected: 1 case that passed before now fails, and the pass rate dropped\.$/);
+  assert.ok(d.reasons.some((r) => r.startsWith('Ran again: "case clean"') && r.endsWith('In the second round it passed on version 0 (2 of 2 trials passed) and failed on version 1 (1 of 2 trials passed), so it failed twice and counts as a regression.')));
+  assert.ok(d.reasons.includes('Regressed: "case clean" passed on version 0 and fails on version 1 (1 of 2 trials passed). In a failing trial, "Refunds $42.00" failed: Second round: the run issued no refund.'));
+});
+
+test('a case whose base fails in the second round cannot show a regression, and is not counted as fixed when the candidate passes', () => {
+  const both = decide(run(0, [['clean', true]]), run(1, [['clean', false]]), null, title, { rechecks: [{ caseId: 'clean', base: twoTrials('clean', 1), candidate: twoTrials('clean', 0) }] });
+  assert.equal(both.decision, 'accept', both.reasons.join('\n'));
+  assert.deepEqual(both.regressedCaseIds, []);
+  assert.ok(both.reasons.some((r) => r.endsWith('In the second round it failed on version 0 (1 of 2 trials passed) and failed on version 1 (0 of 2 trials passed), so the case fails on the base too and cannot show a regression.')));
+
+  const flipped = decide(run(0, [['clean', true]]), run(1, [['clean', false]]), ['clean'], title, { rechecks: [{ caseId: 'clean', base: twoTrials('clean', 0), candidate: twoTrials('clean', 2) }] });
+  assert.deepEqual([flipped.fixedCaseIds, flipped.regressedCaseIds], [[], []]);
+  assert.equal(flipped.decision, 'accept', "the issue's own case is judged on its second round too");
+  assert.ok(flipped.reasons.some((r) => r.endsWith('so the case fails on the base too and cannot show a regression, and it is not counted as fixed.')));
+  assert.ok(!flipped.reasons.some((r) => r.startsWith('Fixed:')));
+});
+
 const trial = (passed: boolean): TrialResult => ({
   traceId: 't',
   passed,
@@ -242,7 +285,14 @@ test('a tier switch down to haiku that fails a strict case one time in five: the
   assert.equal(refund.rule, 'every');
   assert.equal(refund.passed, false);
   assert.ok(refund.trials.length < 10, `stopped after the failed trial, ran ${refund.trials.length}`);
-  assert.equal(haikuRefundCalls(llm) - before, refund.trials.length, 'skipped trials made no model call');
+  const [again] = gate.rechecks!;
+  assert.equal(again!.caseId, 'golden_clean_refund');
+  assert.deepEqual([again!.base.rule, again!.base.trials.length, again!.base.passed], ['every', 10, true], 'the second round uses the every-trial rule and the strict trial count');
+  assert.deepEqual([again!.candidate.rule, again!.candidate.passed], ['every', false]);
+  assert.ok(again!.candidate.trials.length < 10, 'the second round also stops at the first failure');
+  assert.equal(haikuRefundCalls(llm) - before, refund.trials.length + again!.candidate.trials.length, 'skipped trials made no model call');
+  assert.ok(gate.reasons.some((r) => r.startsWith('Ran again: "Clean refund inside the window"') && r.endsWith('so it failed twice and counts as a regression.')));
+  assert.ok(h.store.activity.list().some((a) => a.text === `Running a case again on version ${sonnet.id} and version ${proposal.candidateVersionId} before deciding, because it passed on the base and failed on the candidate: "Clean refund inside the window"`));
   const reason = gate.reasons.find((r) => r.startsWith('Strict:'))!;
   assert.match(reason, new RegExp(`^Strict: "Clean refund inside the window" passed 10 of 10 trials on version ${sonnet.id}, and failed trial \\d+ on version ${proposal.candidateVersionId}, so its other \\d+ were skipped\\.`));
   assert.match(reason, /A request that fails 1 time in 5 would show at least one failure in 10 trials 89% of the time\./);
@@ -267,9 +317,57 @@ test('a context-only proposal runs strict cases with ordinary trials under the m
     assert.deepEqual(r.results.map((x) => [x.caseId, x.rule, x.trials.length]), [['golden_clean_refund', 'majority', 3], ['golden_address', 'majority', 3]]);
   }
   assert.ok(!gate.reasons.some((r) => r.startsWith('Strict:')));
+  assert.deepEqual(gate.rechecks, [], 'nothing regressed, so no case ran a second time');
+  assert.ok(!gate.reasons.some((r) => r.startsWith('Ran again:')));
   const patched = await h.call<{ strict: boolean }>('PATCH', '/api/healer/evals/golden_clean_refund', { strict: false });
   assert.equal(patched.body.strict, false, 'a person can switch it off');
   assert.equal((await h.call('PUT', '/api/healer/settings', { strictTrials: 2 })).status, 400);
   assert.equal((await h.call<{ strictTrials: number }>('PUT', '/api/healer/settings', { strictTrials: 20 })).body.strictTrials, 20);
+  h.close();
+});
+
+// The candidate, which has the note "Thank the customer.", gets the address change wrong on its first two attempts only.
+class FirstRoundSlip extends FlakyHaikuLlm {
+  slips = 0;
+
+  override async chat(req: LlmRequest): Promise<ChatResult> {
+    const last = req.messages.at(-1)!.content;
+    if (req.system.includes('Thank the customer.') && typeof last === 'string' && last.includes('Clifton') && ++this.slips <= 2) {
+      this.requests.push(req);
+      const content: LlmContent = [{ type: 'text', text: 'I will look into it.' }];
+      return { stopReason: 'end_turn', text: 'I will look into it.', toolUses: [], content, run: finishModelRun(modelRun(req, req.role, { system: req.system, messages: req.messages }), { content }, req.model, 1000, 50) };
+    }
+    return super.chat(req);
+  }
+}
+
+test('a gate whose only regression does not happen again in the second round accepts, runs the case on both versions, and says why', async () => {
+  const llm = new FirstRoundSlip();
+  const h = setupHealer(llm);
+  dirs.push(h.dir);
+  h.start();
+  await waitFor(() => h.healer.shopConnected && h.store.versions.count() === 1);
+  await h.call('PUT', '/api/healer/settings', { trialsPerCase: 3 });
+  for (const c of h.store.evalCases.list()) if (c.id !== 'golden_clean_refund' && c.id !== 'golden_address') await h.call('PATCH', `/api/healer/evals/${c.id}`, { enabled: false });
+  const proposal = (await h.call<Proposal>('POST', '/api/healer/proposals', { title: 'A note', rationale: 'Kinder.', changes: [{ surface: 'context', op: 'add', scope: { kind: 'shop' }, text: 'Thank the customer.' }] })).body;
+  const progress: [number, number][] = [];
+  const gate = await gateProposal(h.healer, proposal.id, (done, total) => progress.push([done, total]));
+
+  assert.equal(gate.decision, 'accept', gate.reasons.join('\n'));
+  assert.deepEqual([gate.regressedCaseIds, gate.fixedCaseIds], [[], []]);
+  const candidate = h.store.evalRuns.get(gate.candidateRunId!)!;
+  assert.equal(candidate.results.find((r) => r.caseId === 'golden_address')!.passed, false, 'the first round failed it');
+  assert.deepEqual(
+    gate.rechecks!.map((r) => [r.caseId, r.base.rule, r.base.trials.length, r.base.passed, r.candidate.trials.length, r.candidate.passed]),
+    [['golden_address', 'majority', 3, true, 3, true]],
+  );
+  for (const t of [...gate.rechecks![0]!.base.trials, ...gate.rechecks![0]!.candidate.trials]) assert.ok(h.store.trace(t.traceId), 'second-round traces are kept');
+  assert.deepEqual(progress.at(-1), [6, 6], 'the second round reports its own progress');
+  assert.ok(
+    gate.reasons.includes(
+      `Ran again: "Change the address of an order still processing" passed on version 0 (3 of 3 trials passed) and failed on version ${proposal.candidateVersionId} (1 of 3 trials passed) in the first round. In the second round it passed on version 0 (3 of 3 trials passed) and passed on version ${proposal.candidateVersionId} (3 of 3 trials passed), so the first failure is treated as run-to-run variation and not counted as a regression.`,
+    ),
+    gate.reasons.join('\n'),
+  );
   h.close();
 });

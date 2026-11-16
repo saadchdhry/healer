@@ -383,6 +383,17 @@ export interface CaseValidation {
   caughtBy: string[];
   setAside: { check: EvalCheckSpec; reason: string }[];
   flagged: { checkId: string; reason: string }[];
+  // The case run several times on the live version, to tell a check that flips with the agent's behaviour from a rubric
+  // the grader cannot decide. Absent on a case tested before this test existed.
+  stability?: CaseStability;
+}
+
+export interface CaseStability {
+  versionId: number;
+  traceIds: string[];
+  // Each check the runs graded, with its result per run in the order of `traceIds`. `regraded` holds a rubric's second
+  // grade of the same traces, made only when its first grades differed; null otherwise.
+  checks: { checkId: string; label: string; kind: CheckKind; passed: boolean[]; regraded: boolean[] | null }[];
 }
 
 export interface TrialResult {
@@ -428,6 +439,15 @@ export interface GateRun {
   regressedCaseIds: string[];
   decision: 'pending' | 'accept' | 'reject';
   reasons: string[];
+  // Each case that passed on the base and failed on the candidate, run once more on both versions under the same rule.
+  // The decision uses these results in place of the first round's. Absent on a gate run stored before this existed.
+  rechecks?: Recheck[];
+}
+
+export interface Recheck {
+  caseId: string;
+  base: CaseResult;
+  candidate: CaseResult;
 }
 
 // ── Router training ───────────────────────────────────────────────────────
